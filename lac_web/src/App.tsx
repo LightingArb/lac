@@ -7,7 +7,7 @@ import { SignalPanel } from './components/signals/SignalPanel';
 import { Drawer } from './components/ui/Drawer';
 import { CUSTOMER_PLAN, type CategoryId } from './data/catalog';
 import { DEFAULT_PREFERENCES, type Preferences } from './data/preferences';
-import { DEFAULT_REFERRAL_CODE } from './data/referral';
+import { DEFAULT_REFERRAL_CODE, MY_AGENTS } from './data/referral';
 import {
   INITIAL_WORKSPACE,
   deriveWorkspace,
@@ -17,8 +17,7 @@ import {
 } from './lib/markets';
 import { COMPACT_QUERY, MOBILE_QUERY, useMediaQuery } from './lib/useMediaQuery';
 import { MarketsPage } from './pages/MarketsPage';
-import { LiveMarketsPage } from './pages/LiveMarketsPage';
-import { useLive, type DataMode, type LiveCategory } from './lib/live';
+import { useLiveWorkspace, type DataMode } from './lib/live';
 import { ProductsPage } from './pages/ProductsPage';
 import { ReferralPage } from './pages/ReferralPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -52,12 +51,13 @@ export default function App() {
   const [signalsDrawerOpen, setSignalsDrawerOpen] = useState(false);
   const [buyOpen, setBuyOpen] = useState(false);
   const [state, setState] = useState<WorkspaceState>(INITIAL_WORKSPACE);
+  const [agents, setAgents] = useState(MY_AGENTS);
   const [referralCode, setReferralCode] = useState(DEFAULT_REFERRAL_CODE);
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [dataMode, setDataMode] = useState<DataMode>('demo');
   const [liveCategory, setLiveCategory] = useState('trending');
   const [liveQuery, setLiveQuery] = useState('');
-  const liveCategories = useLive<{ categories: LiveCategory[] }>(dataMode === 'live' && mode === 'prediction' ? '/api/live/categories' : null, 600000);
+  const live = useLiveWorkspace(dataMode === 'live' && mode === 'prediction', liveCategory, liveQuery);
 
   const update = (patch: Partial<WorkspaceState>) => setState((prev) => ({ ...prev, ...patch }));
 
@@ -69,13 +69,22 @@ export default function App() {
     if (!signalsInDrawer) setSignalsDrawerOpen(false);
   }, [signalsInDrawer]);
 
-  const workspace = useMemo(
-    () => (dataMode === 'demo' && (mode === 'prediction' || mode === 'signal') ? deriveWorkspace(mode, state, CUSTOMER_PLAN) : null),
+  const demoWorkspace = useMemo(
+    () =>
+      dataMode === 'demo' && (mode === 'prediction' || mode === 'signal')
+        ? deriveWorkspace(mode, state, CUSTOMER_PLAN)
+        : null,
     [mode, state, dataMode],
   );
 
+  const workspace = dataMode === 'live' ? live.workspace : demoWorkspace;
+
   const pickCategory = (id: string) => {
-    if (dataMode === 'live') { setLiveCategory(id); setLiveQuery(''); return; }
+    if (dataMode === 'live') {
+      setLiveCategory(id);
+      setLiveQuery('');
+      return;
+    }
     update(
       mode === 'signal'
         ? { signalCategory: id as SignalCategoryId, query: '' }
@@ -98,10 +107,42 @@ export default function App() {
   // Keyed by mode so Prediction and Signal don't share scroll position or chart settings.
   const marketsPage = workspace && (
     <MarketsPage
-      key={mode}
+      key={`${mode}:${dataMode}`}
       workspace={workspace}
+      error={live.error}
+      listFooter={
+        dataMode === 'live' && (
+          <nav className={styles.pagination} aria-label="Event pages">
+            <button disabled={live.page === 1} onClick={live.previous}>
+              Previous
+            </button>
+            <span>Page {live.page}</span>
+            <button disabled={!live.hasNext} onClick={live.next}>
+              Next
+            </button>
+          </nav>
+        )
+      }
+      detailFooter={
+        dataMode === 'live' &&
+        live.marketCount > 50 && (
+          <nav className={styles.pagination} aria-label="Market pages">
+            <button disabled={live.marketPage === 1} onClick={live.previousMarket}>
+              Previous markets
+            </button>
+            <span>
+              Page {live.marketPage} · {live.marketCount} markets
+            </span>
+            <button disabled={!live.hasNextMarket} onClick={live.nextMarket}>
+              Next markets
+            </button>
+          </nav>
+        )
+      }
       onSelectEvent={(event) =>
-        update(mode === 'signal' ? { signalEventId: event.id, highlightId: null } : { predictionEventId: event.id })
+        dataMode === 'live'
+          ? live.pick(event)
+          : update(mode === 'signal' ? { signalEventId: event.id, highlightId: null } : { predictionEventId: event.id })
       }
       onClearHighlight={() => update({ highlightId: null })}
     />
@@ -117,9 +158,7 @@ export default function App() {
       setMenuDrawerOpen(false);
       setBuyOpen(true);
     },
-    categories: dataMode === 'live' && mode === 'prediction'
-      ? liveCategories.data?.categories.map(category => ({ ...category, icon: 'prediction' as const, active: category.id === liveCategory })) ?? null
-      : workspace?.categories ?? null,
+    categories: workspace?.categories ?? null,
     categoryHeading: mode === 'signal' ? 'Signal categories' : 'Categories',
     onPickCategory: (id: string) => {
       pickCategory(id);
@@ -154,7 +193,13 @@ export default function App() {
               : [MODE_LABELS[mode]]
           }
           current={workspace?.selected?.title ?? null}
-          search={dataMode === 'live' && mode === 'prediction' ? { value: liveQuery, onChange: setLiveQuery } : workspace ? { value: state.query, onChange: (query) => update({ query }) } : null}
+          search={
+            dataMode === 'live' && mode === 'prediction'
+              ? { value: liveQuery, onChange: setLiveQuery }
+              : workspace
+                ? { value: state.query, onChange: (query) => update({ query }) }
+                : null
+          }
           onOpenMenu={isMobile ? () => setMenuDrawerOpen(true) : undefined}
           signals={
             signalsInDrawer && mode === 'signal' && workspace
@@ -164,11 +209,23 @@ export default function App() {
         />
         <Routes>
           <Route index element={<Navigate to="/prediction" replace />} />
-          <Route path="prediction" element={dataMode === 'live' ? <LiveMarketsPage key={`${liveCategory}:${liveQuery}`} category={liveCategory} query={liveQuery} /> : marketsPage} />
-          <Route path="signal" element={dataMode === 'live' ? <div style={{ padding: '40px', color: 'var(--color-text-muted)' }}>No LAC signals in Live demo</div> : marketsPage} />
+          <Route path="prediction" element={marketsPage} />
+          <Route
+            path="signal"
+            element={
+              dataMode === 'live' ? (
+                <div style={{ padding: '40px', color: 'var(--color-text-muted)' }}>No LAC signals in Live demo</div>
+              ) : (
+                marketsPage
+              )
+            }
+          />
           <Route path="stocks" element={<StocksPage />} />
           <Route path="products" element={<ProductsPage />} />
-          <Route path="referral" element={<ReferralPage code={referralCode} />} />
+          <Route
+            path="referral"
+            element={<ReferralPage code={referralCode} agents={agents} onAgentsChange={setAgents} />}
+          />
           <Route
             path="settings"
             element={

@@ -19,6 +19,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+  max-height: 96px;
+  overflow-y: auto;
 }
 
 .legendItem {
@@ -92,6 +94,18 @@
   display: flex;
   justify-content: space-between;
   padding-right: 44px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+.note {
   color: var(--color-text-muted);
   font-size: 11px;
 }

@@ -77,7 +77,7 @@ export function findOutcome(event: MarketEvent, outcomeId: string): Outcome {
 
 /** LAC fair value of one side of an outcome. */
 export function fairValue(outcome: Outcome, side: Side): number {
-  const fairYes = outcome.fair ?? outcome.yes;
+  const fairYes = outcome.fair ?? outcome.yes!;
   return side === 'yes' ? fairYes : 1 - fairYes;
 }
 
@@ -92,7 +92,7 @@ export function marketAnchorId(eventId: string, outcomeId: string): string {
 export function priceSignals(plan: Record<ProductId, boolean>): PricedSignal[] {
   return SIGNALS.filter((s) => plan[s.product]).map((s) => {
     const outcome = findOutcome(EVENTS_BY_ID[s.eventId], s.outcomeId);
-    const entry = s.side === 'yes' ? outcome.yes : outcome.no;
+    const entry = (s.side === 'yes' ? outcome.yes : outcome.no)!;
     const fair = fairValue(outcome, s.side);
     return { ...s, entry, fair, ev: fair - entry };
   });
@@ -127,7 +127,8 @@ export function deriveWorkspace(
       id: c.id,
       label: c.label,
       icon: c.icon,
-      count: c.id === 'trending' ? EVENTS.filter((e) => e.trending).length : EVENTS.filter((e) => e.cat === c.id).length,
+      count:
+        c.id === 'trending' ? EVENTS.filter((e) => e.trending).length : EVENTS.filter((e) => e.cat === c.id).length,
       active: !searching && active === c.id,
     }));
     const events = searching

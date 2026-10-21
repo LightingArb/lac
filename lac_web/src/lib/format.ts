@@ -1,5 +1,6 @@
 /** Price in cents, e.g. 0.42 → "42¢". */
-export function cents(p: number): string {
+export function cents(p: number | null): string {
+  if (p === null) return '—';
   const c = Math.round(p * 100);
   if (c < 1) return '<1¢';
   if (c > 99) return '>99¢';
@@ -7,21 +8,23 @@ export function cents(p: number): string {
 }
 
 /** Payout multiple for a winning share bought at `p`, e.g. 0.25 → "×4.0". */
-export function multiplier(p: number): string {
-  if (p <= 0.005) return '×200+';
+export function multiplier(p: number | null): string {
+  if (p === null || p <= 0) return '—';
   const m = 1 / p;
   return `×${m >= 10 ? String(Math.round(m)) : m.toFixed(1)}`;
 }
 
 /** Implied probability, e.g. 0.42 → "42%". */
-export function chance(p: number): string {
+export function chance(p: number | null): string {
+  if (p === null) return '—';
   const c = Math.round(p * 100);
   if (c < 1) return '<1%';
   if (c > 99) return '>99%';
   return `${c}%`;
 }
 
-export function money(n: number): string {
+export function money(n: number | null): string {
+  if (n === null) return '—';
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
   return `$${n}`;

@@ -82,3 +82,12 @@
   min-height: 44px;
   font-weight: 500;
 }
+
+.apiForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.apiForm button {
+  align-self: flex-start;
+}

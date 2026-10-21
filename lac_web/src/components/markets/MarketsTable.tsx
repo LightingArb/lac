@@ -1,14 +1,17 @@
 import type { MarketEvent, Outcome } from '../../data/catalog';
+import { marketAnchorId, type PricedSignal } from '../../lib/markets';
+import { cx } from '../../lib/cx';
 import { cents, chance, money } from '../../lib/format';
 import styles from './MarketsTable.module.css';
 
 interface MarketsTableProps {
   event: MarketEvent;
   outcomes: Outcome[];
+  highlight: PricedSignal | null;
 }
 
 /** Prediction page: each outcome with its chance and Yes/No buy buttons. */
-export function MarketsTable({ event, outcomes }: MarketsTableProps) {
+export function MarketsTable({ event, outcomes, highlight }: MarketsTableProps) {
   const multi = event.kind === 'multi';
   const yesLabel = multi ? 'Yes' : (event.yesLabel ?? 'Yes');
   const noLabel = multi ? 'No' : (event.noLabel ?? 'No');
@@ -16,7 +19,11 @@ export function MarketsTable({ event, outcomes }: MarketsTableProps) {
   return (
     <div className={styles.table}>
       {outcomes.map((o) => (
-        <div key={o.id} className={styles.row}>
+        <div
+          key={o.id}
+          id={marketAnchorId(event.id, o.id)}
+          className={cx(styles.row, highlight?.outcomeId === o.id && styles.highlightRow)}
+        >
           <div className={styles.label}>
             <span className={styles.name}>{o.label}</span>
             <span className={styles.vol}>Vol {money(o.vol)}</span>
@@ -26,11 +33,23 @@ export function MarketsTable({ event, outcomes }: MarketsTableProps) {
             <span className={styles.chanceSub}>{multi ? 'chance' : `${yesLabel} chance`}</span>
           </div>
           <div className={styles.actions}>
-            <button type="button" className={styles.yes}>
-              {yesLabel} {cents(o.yes)}
+            <button
+              type="button"
+              className={cx(
+                styles.yes,
+                highlight?.outcomeId === o.id && highlight.side === 'yes' && styles.highlightSide,
+              )}
+            >
+              {o.yesLabel ?? yesLabel} {cents(event.source === 'live' ? (o.yesAsk ?? null) : o.yes)}
             </button>
-            <button type="button" className={styles.no}>
-              {noLabel} {cents(o.no)}
+            <button
+              type="button"
+              className={cx(
+                styles.no,
+                highlight?.outcomeId === o.id && highlight.side === 'no' && styles.highlightSide,
+              )}
+            >
+              {o.noLabel ?? noLabel} {cents(event.source === 'live' ? (o.noAsk ?? null) : o.no)}
             </button>
           </div>
         </div>

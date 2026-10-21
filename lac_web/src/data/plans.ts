@@ -38,7 +38,12 @@ function signalPlan(name: string, icon: IconName, tone: PlanDef['tone'], tagline
     tagline,
     price: '[$xx]',
     recurring: true,
-    features: [`${name} in the Signal page`, 'LAC Fair on every outcome', `${name} signal feed`, `Telegram alerts · ${name}`],
+    features: [
+      `${name} in the Signal page`,
+      'Signals marked on the market table',
+      `${name} signal feed`,
+      `Telegram alerts · ${name}`,
+    ],
     cta: 'Subscribe',
     kind: 'paid',
   };
@@ -66,7 +71,7 @@ export const PLANS: PlanDef[] = [
     recurring: true,
     features: [
       'Weather, Crypto, Forex, Future and Sport',
-      'LAC Fair on every outcome',
+      'Signals marked on the market table',
       'Full positive-EV signal feed',
       'Telegram alerts for all five',
     ],

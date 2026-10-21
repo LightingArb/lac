@@ -205,7 +205,36 @@
   flex: 1 1 auto;
 }
 
-.modeSwitch { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 6px; padding: 2px; background: var(--color-surface-sunken); border-radius: 6px; }
-.modeSwitch button { flex: 1; border: 0; background: transparent; border-radius: 4px; padding: 4px 7px; font-size: 10px; color: var(--color-text-muted); cursor: pointer; }
-.modeSwitch button[aria-pressed='true'] { background: var(--color-surface); color: var(--color-primary); box-shadow: 0 1px 3px #00000010; font-weight: 650; }
-.rail .modeSwitch { width: 50px; }
+.modeSwitch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 2px;
+  background: var(--color-surface-sunken);
+  border-radius: 6px;
+}
+.modeSwitch button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  padding: 4px 7px;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.modeSwitch button[aria-pressed='true'] {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  box-shadow: 0 1px 3px #00000010;
+  font-weight: 650;
+}
+.rail .modeSwitch {
+  width: 50px;
+}
+
+.railItem.buy,
+.railItem.buy:hover {
+  color: var(--color-success);
+}

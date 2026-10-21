@@ -90,3 +90,14 @@
 .no:hover {
   background: #fee2e2;
 }
+
+.highlightRow {
+  background: #fffbeb;
+}
+.highlightSide,
+.highlightSide:hover {
+  background: #fde047;
+  border: 2px solid #eab308;
+  color: #713f12;
+  box-shadow: 0 0 0 2px #fef08a;
+}

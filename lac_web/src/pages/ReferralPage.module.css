@@ -58,50 +58,6 @@
   font-weight: 700;
 }
 
-.steps {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.step {
-  flex-direction: row;
-  gap: 12px;
-  padding: 16px;
-}
-
-.stepNumber {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 16px;
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-  font-weight: 700;
-}
-
-.stepText {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.stepTitle {
-  font-weight: 600;
-}
-
-.stepBody {
-  color: var(--color-text-muted);
-  font-size: 13px;
-}
-
 .tableSection {
   display: flex;
   flex-direction: column;
@@ -187,4 +143,45 @@
 .footnote {
   color: var(--color-text-muted);
   font-size: 12px;
+}
+
+.agents {
+  min-width: 850px;
+  table-layout: auto;
+}
+.agents th:first-child,
+.agents td:first-child {
+  width: 20%;
+}
+.rate {
+  width: 62px;
+  padding: 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+.splitPanel {
+  padding: 16px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  font-size: 13px;
+}
+.split {
+  display: flex;
+  height: 30px;
+  margin-top: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.split span {
+  display: grid;
+  place-items: center;
+  transition: width 0.15s ease;
+  white-space: nowrap;
+}
+.splitLabels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-weight: 600;
 }

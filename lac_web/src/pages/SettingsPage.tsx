@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button } from '../components/ui/Button';
 import { Page, PageHeader } from '../components/ui/Page';
 import { Panel } from '../components/ui/Panel';
@@ -15,7 +15,15 @@ interface SettingsPageProps {
   onPreferencesChange: (preferences: Preferences) => void;
 }
 
-export function SettingsPage({ referralCode, onReferralCodeChange, preferences, onPreferencesChange }: SettingsPageProps) {
+export function SettingsPage({
+  referralCode,
+  onReferralCodeChange,
+  preferences,
+  onPreferencesChange,
+}: SettingsPageProps) {
+  const [walletConnected, setWalletConnected] = useState(false);
+  const [apiSaved, setApiSaved] = useState(false);
+  const apiForm = useRef<HTMLFormElement>(null);
   const [draft, setDraft] = useState(referralCode);
   const [saved, setSaved] = useState(false);
   const canSave = draft !== '' && draft !== referralCode;
@@ -64,12 +72,58 @@ export function SettingsPage({ referralCode, onReferralCodeChange, preferences, 
       </Panel>
 
       <Panel>
+        <h2 className={styles.sectionTitle}>Polymarket trading</h2>
+        <p className={styles.hint}>
+          Your wallet signs each order and your API key sends it; LAC adds its builder code to every order.
+        </p>
+        <div className={styles.prefRow}>
+          <span>
+            <strong>Wallet</strong>
+            <br />
+            {walletConnected ? 'Connected · 0x8f3a…41c2' : 'Not connected'}
+          </span>
+          <Button onClick={() => setWalletConnected(!walletConnected)}>
+            {walletConnected ? 'Disconnect' : 'Connect wallet'}
+          </Button>
+        </div>
+        <form
+          ref={apiForm}
+          className={styles.apiForm}
+          autoComplete="off"
+          onSubmit={(e) => {
+            e.preventDefault();
+            apiForm.current?.reset();
+            setApiSaved(true);
+          }}
+        >
+          <TextField label="API key" type="password" autoComplete="off" onChange={() => setApiSaved(false)} />
+          <TextField label="API secret" type="password" autoComplete="off" onChange={() => setApiSaved(false)} />
+          <TextField label="Passphrase" type="password" autoComplete="off" onChange={() => setApiSaved(false)} />
+          <Button type="submit">Save API key</Button>
+        </form>
+        <a href="https://docs.polymarket.com/" target="_blank" rel="noopener noreferrer" className={styles.textLink}>
+          Where to find your API key
+        </a>
+        <span className={styles.hint}>
+          {apiSaved
+            ? 'Demo only. API credentials were cleared and are not stored.'
+            : 'Demo only. No wallet connection or API credentials are stored.'}
+        </span>
+      </Panel>
+
+      <Panel>
         <div className={styles.sectionHead}>
           <h2 className={styles.sectionTitle}>Telegram</h2>
           <span className={styles.hint}>Link your Telegram account to receive LAC signals there.</span>
         </div>
         <div className={styles.inline}>
-          <TextField label="Telegram UID" type="text" inputMode="numeric" placeholder="e.g. 123456789" className={styles.grow} />
+          <TextField
+            label="Telegram UID"
+            type="text"
+            inputMode="numeric"
+            placeholder="e.g. 123456789"
+            className={styles.grow}
+          />
           <Button>Link Telegram</Button>
         </div>
         <a href="https://t.me/" target="_blank" rel="noopener noreferrer" className={styles.textLink}>

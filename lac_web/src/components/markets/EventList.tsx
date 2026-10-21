@@ -1,4 +1,5 @@
 import type { MarketEvent } from '../../data/catalog';
+import { useEffect, type ReactNode } from 'react';
 import { plural } from '../../lib/format';
 import { EventCard } from './EventCard';
 import styles from './EventList.module.css';
@@ -11,9 +12,22 @@ interface EventListProps {
   showPaths: boolean;
   signalCountByEvent: Record<string, number>;
   onSelect: (event: MarketEvent) => void;
+  footer?: ReactNode;
 }
 
-export function EventList({ title, events, emptyText, selectedId, showPaths, signalCountByEvent, onSelect }: EventListProps) {
+export function EventList({
+  title,
+  events,
+  emptyText,
+  selectedId,
+  showPaths,
+  signalCountByEvent,
+  onSelect,
+  footer,
+}: EventListProps) {
+  useEffect(() => {
+    if (selectedId) document.getElementById(`event-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId]);
   return (
     <section aria-label="Events" className={styles.list}>
       <div className={styles.header}>
@@ -31,6 +45,7 @@ export function EventList({ title, events, emptyText, selectedId, showPaths, sig
           onSelect={() => onSelect(event)}
         />
       ))}
+      {footer}
     </section>
   );
 }
