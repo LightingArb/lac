@@ -1,0 +1,47 @@
+.avatar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.md {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+}
+
+.sm {
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+}
+
+.teamA {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.teamB {
+  background: #fef9c3;
+  color: #713f12;
+}
+
+.live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-danger);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-danger-dot);
+}

@@ -1,0 +1,22 @@
+.badge {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.md {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+}
+
+.lg {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-xl);
+  font-size: 14px;
+}

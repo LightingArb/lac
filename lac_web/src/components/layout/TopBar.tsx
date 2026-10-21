@@ -1,0 +1,74 @@
+import { Fragment } from 'react';
+import { cx } from '../../lib/cx';
+import { Icon } from '../ui/Icon';
+import { IconButton } from '../ui/IconButton';
+import styles from './TopBar.module.css';
+
+interface TopBarProps {
+  /** Breadcrumb trail, e.g. ["Prediction", "Trending"]. */
+  trail: string[];
+  /** Selected event title, shown bold at the end of the trail. */
+  current: string | null;
+  /** Shown on the Prediction and Signal pages only. */
+  search: { value: string; onChange: (value: string) => void } | null;
+  /** Phone layout: opens the navigation drawer. */
+  onOpenMenu?: () => void;
+  /** Narrow screens on the Signal page: opens the signals drawer. */
+  signals?: { count: number; onOpen: () => void } | null;
+}
+
+export function TopBar({ trail, current, search, onOpenMenu, signals }: TopBarProps) {
+  return (
+    <div className={styles.topBar}>
+      {onOpenMenu && <IconButton label="Open menu" icon="menu" aria-haspopup="dialog" onClick={onOpenMenu} />}
+      <nav aria-label="Breadcrumb" className={cx(styles.breadcrumb, current && styles.hasCurrent)}>
+        {trail.map((crumb, i) => (
+          <Fragment key={i}>
+            {i > 0 && <Separator />}
+            <span className={styles.crumb}>{crumb}</span>
+          </Fragment>
+        ))}
+        {current && (
+          <>
+            <Separator />
+            <span className={styles.current} aria-current="page">
+              {current}
+            </span>
+          </>
+        )}
+      </nav>
+      {signals && (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-label={`${signals.count} signals`}
+          className={styles.signalsButton}
+          onClick={signals.onOpen}
+        >
+          <Icon name="signal" size={18} strokeWidth={2} />
+          <span>{signals.count}</span>
+        </button>
+      )}
+      {search && (
+        <>
+          <IconButton label="Filter events" icon="filter" variant="outline" />
+          <label className={styles.search}>
+            <Icon name="search" size={18} strokeWidth={2} />
+            <input
+              type="search"
+              value={search.value}
+              onChange={(e) => search.onChange(e.target.value)}
+              placeholder="Search markets"
+              aria-label="Search markets"
+              className={styles.searchInput}
+            />
+          </label>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Separator() {
+  return <Icon name="chevronRight" size={16} strokeWidth={2} className={styles.separator} />;
+}

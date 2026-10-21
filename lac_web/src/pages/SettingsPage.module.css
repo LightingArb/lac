@@ -1,0 +1,84 @@
+.header {
+  margin-bottom: 4px;
+}
+
+.sectionHead {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sectionTitle {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.hint {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.grow {
+  flex: 1 1 240px;
+}
+
+.codeInput {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.link {
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+.saved {
+  color: var(--color-success);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.textLink {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+}
+
+.prefRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prefLabel {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.legal {
+  gap: 6px;
+}
+
+.legal .sectionTitle {
+  margin-bottom: 4px;
+}
+
+.legalLink {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 500;
+}

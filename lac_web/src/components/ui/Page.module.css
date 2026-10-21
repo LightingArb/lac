@@ -1,0 +1,46 @@
+.page {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 32px 48px;
+  background: var(--color-canvas);
+}
+
+@container (max-width: 639px) {
+  .page {
+    padding: 20px 16px 40px;
+  }
+}
+
+.inner {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0 auto;
+}
+
+.wide {
+  max-width: 1120px;
+}
+
+.narrow {
+  max-width: 760px;
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.title {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.description {
+  color: var(--color-text-muted);
+  font-size: 15px;
+}

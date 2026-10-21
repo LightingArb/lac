@@ -1,0 +1,19 @@
+[project]
+name = "lac-data"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = ["psycopg[binary]>=3.2,<4", "requests>=2.32,<3"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.12", "sqlfluff>=3,<4"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["m_live/tests", "m_historical/tests"]
+
+[tool.sqlfluff.core]
+dialect = "postgres"
+max_line_length = 120

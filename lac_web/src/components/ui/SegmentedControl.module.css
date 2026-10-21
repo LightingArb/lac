@@ -1,0 +1,39 @@
+.track {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+}
+
+.strong {
+  border-radius: var(--radius-lg);
+  background: var(--color-segment-track);
+}
+
+.segment {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-weight: 500;
+}
+
+.sm {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.md {
+  height: 36px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.selected {
+  background: var(--color-surface);
+  box-shadow: var(--shadow-segment);
+  color: var(--color-text);
+  font-weight: 600;
+}

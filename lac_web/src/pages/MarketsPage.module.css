@@ -1,0 +1,13 @@
+.workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Narrow content area: list on top, detail below, one shared scroll. */
+@container (max-width: 639px) {
+  .workspace {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+}

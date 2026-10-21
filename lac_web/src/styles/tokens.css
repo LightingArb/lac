@@ -1,0 +1,68 @@
+/* Design tokens from the "LAC Web 打版" design. */
+:root {
+  --font-sans: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Surfaces */
+  --color-bg: #f3f4f6;
+  --color-canvas: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-surface-sunken: #f1f5f9;
+  --color-segment-track: #e9edf2;
+  --color-outcome-fill: #dce3ed;
+
+  /* Borders */
+  --color-border: #e5e7eb;
+  --color-border-subtle: #eef0f3;
+  --color-border-strong: #cbd5e1;
+  --color-chart-baseline: #e2e8f0;
+
+  /* Text */
+  --color-text: #0f172a;
+  --color-text-secondary: #334155;
+  --color-text-subtle: #475569;
+  --color-text-muted: #556274;
+  --color-text-disabled: #94a3b8;
+
+  /* Brand */
+  --color-primary: #1d4ed8;
+  --color-primary-hover: #1e40af;
+  --color-primary-soft: #eff6ff;
+  --color-link-hover: #1e3a8a;
+
+  /* Status */
+  --color-success: #047857;
+  --color-success-strong: #065f46;
+  --color-success-soft: #ecfdf5;
+  --color-success-border: #a7f3d0;
+  --color-danger: #b91c1c;
+  --color-danger-dot: #dc2626;
+  --color-danger-soft: #fef2f2;
+  --color-danger-border: #fecaca;
+
+  /* LAC signal highlight */
+  --color-highlight-bg: #fef9c3;
+  --color-highlight-border: #eab308;
+  --color-highlight-strong: #ca8a04;
+  --color-highlight-text: #713f12;
+  --color-highlight-ink: #422006;
+  --color-signal-active: #fffbeb;
+
+  /* Chart series */
+  --chart-1: #1d4ed8;
+  --chart-2: #ea580c;
+  --chart-3: #7c3aed;
+  --chart-4: #0f766e;
+
+  /* Shape */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-2xl: 16px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-segment: 0 1px 2px rgba(15, 23, 42, 0.12);
+  --focus-ring: 0 0 0 3px rgba(29, 78, 216, 0.12);
+}

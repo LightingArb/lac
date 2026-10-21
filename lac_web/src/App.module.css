@@ -1,0 +1,23 @@
+/*
+ * Layout breakpoints:
+ * - App chrome switches with media queries (lib/useMediaQuery.ts): navigation becomes a drawer
+ *   at 767px and below, the signals column at 1199px and below.
+ * - Content inside <main> reflows with container queries on main's own width, so it also
+ *   adapts when the side columns leave it narrow on a tablet or small laptop.
+ */
+
+.shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--color-bg);
+}
+
+.main {
+  display: flex;
+  flex: 1 1 760px;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+  height: 100dvh;
+  container-type: inline-size;
+}
