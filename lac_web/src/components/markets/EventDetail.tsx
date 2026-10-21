@@ -1,6 +1,7 @@
 import { useState, type ReactNode, type Ref } from 'react';
 import type { MarketEvent } from '../../data/catalog';
-import { money, plural } from '../../lib/format';
+import { useT } from '../../i18n';
+import { money } from '../../lib/format';
 import { type PricedSignal } from '../../lib/markets';
 import { Icon, type IconName } from '../ui/Icon';
 import { IconButton } from '../ui/IconButton';
@@ -23,12 +24,13 @@ interface EventDetailProps {
 }
 
 export function EventDetail({ ref, event, highlight, footer, error }: EventDetailProps) {
+  const t = useT();
   const [hideLow, setHideLow] = useState(false);
 
   if (!event) {
     return (
-      <section ref={ref} aria-label="Event detail" className={styles.detail}>
-        <p className={styles.empty}>{error ?? 'Pick an event to see its markets.'}</p>
+      <section ref={ref} aria-label={t.markets.detail} className={styles.detail}>
+        <p className={styles.empty}>{error ?? t.markets.pickEvent}</p>
       </section>
     );
   }
@@ -39,20 +41,20 @@ export function EventDetail({ ref, event, highlight, footer, error }: EventDetai
   const hidden = event.rows.length - outcomes.length;
 
   return (
-    <section ref={ref} aria-label="Event detail" className={styles.detail}>
+    <section ref={ref} aria-label={t.markets.detail} className={styles.detail}>
       <div className={styles.inner}>
         <div className={styles.header}>
           <EventBadge event={event} size="lg" />
           <span className={styles.heading}>
             <h1 className={styles.title}>{event.title}</h1>
           </span>
-          <IconButton label="Share event" icon="share" />
-          <IconButton label="Bookmark event" icon="star" />
+          <IconButton label={t.markets.share} icon="share" />
+          <IconButton label={t.markets.bookmark} icon="star" />
         </div>
 
         {event.match && (
           <div className={styles.scoreboard}>
-            <LiveIndicator className={styles.scoreboardLive}>LIVE · {event.match.mapText}</LiveIndicator>
+            <LiveIndicator className={styles.scoreboardLive}>{t.markets.live} · {event.match.mapText}</LiveIndicator>
             <div className={styles.scoreRow}>
               <TeamAvatar abbr={event.match.aAbbr} team="a" size="sm" />
               <span className={styles.scoreTeam}>{event.match.teamA}</span>
@@ -75,23 +77,21 @@ export function EventDetail({ ref, event, highlight, footer, error }: EventDetai
         </div>
 
         <div className={styles.stats}>
-          <Stat icon="clock" label="Start" value={event.start} />
-          <Stat icon="clock" label="End" value={event.end} />
-          <Stat icon="volume" label="24h volume" value={money(event.vol24)} />
-          <Stat icon="volume" label="Total volume" value={money(event.volTotal)} />
+          <Stat icon="clock" label={t.markets.start} value={t.date(event.start)} />
+          <Stat icon="clock" label={t.markets.end} value={t.date(event.end)} />
+          <Stat icon="volume" label={t.markets.volume24h} value={money(event.vol24)} />
+          <Stat icon="volume" label={t.markets.volumeTotal} value={money(event.volTotal)} />
         </div>
 
         <PriceChart event={event} />
 
         <div className={styles.markets}>
           <div className={styles.marketsHeader}>
-            <h2 className={styles.marketsTitle}>Markets</h2>
-            <Switch label="Hide low-liquidity markets" checked={hideLow} onChange={setHideLow} />
+            <h2 className={styles.marketsTitle}>{t.markets.markets}</h2>
+            <Switch label={t.markets.hideLow} checked={hideLow} onChange={setHideLow} />
           </div>
           {hidden > 0 && (
-            <span className={styles.hiddenNote}>
-              {plural(hidden, 'market', 'markets')} under $25K liquidity or unavailable liquidity hidden
-            </span>
+            <span className={styles.hiddenNote}>{t.markets.hiddenNote(hidden)}</span>
           )}
           <MarketsTable event={event} outcomes={outcomes} highlight={highlight} />
           {footer}

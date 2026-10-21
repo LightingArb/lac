@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Product, ProductId } from '../../data/catalog';
+import { useT } from '../../i18n';
 import { cx } from '../../lib/cx';
 import type { PricedSignal } from '../../lib/markets';
 import { Icon } from '../ui/Icon';
@@ -9,12 +10,12 @@ import styles from './SignalPanel.module.css';
 
 type SortId = 'latest' | 'ev' | 'roi' | 'depth' | 'expiry';
 
-const SORTS: { id: SortId; label: string; key: (s: PricedSignal) => number }[] = [
-  { id: 'latest', label: 'Latest', key: (s) => s.updatedSec },
-  { id: 'ev', label: 'EV ↓', key: (s) => -s.ev },
-  { id: 'roi', label: 'ROI ↓', key: (s) => -(s.ev / s.entry) },
-  { id: 'depth', label: 'Depth ↓', key: (s) => -s.depth },
-  { id: 'expiry', label: 'Expiry ↑', key: (s) => s.minutesLeft },
+const SORTS: { id: SortId; key: (s: PricedSignal) => number }[] = [
+  { id: 'latest', key: (s) => s.updatedSec },
+  { id: 'ev', key: (s) => -s.ev },
+  { id: 'roi', key: (s) => -(s.ev / s.entry) },
+  { id: 'depth', key: (s) => -s.depth },
+  { id: 'expiry', key: (s) => s.minutesLeft },
 ];
 
 interface SignalPanelProps {
@@ -29,53 +30,57 @@ interface SignalPanelProps {
 }
 
 export function SignalPanel({ variant = 'aside', open, onToggle, signals, products, activeId, onSelect }: SignalPanelProps) {
+  const t = useT();
   const [tab, setTab] = useState<'all' | ProductId>('all');
   const [sort, setSort] = useState<SortId>('latest');
   const inDrawer = variant === 'drawer';
 
   if (!open && !inDrawer) {
     return (
-      <aside aria-label="LAC signals" className={styles.collapsed}>
-        <IconButton label="Expand signals" icon="panelRight" onClick={onToggle} />
-        <span className={styles.verticalLabel}>SIGNALS · {signals.length}</span>
+      <aside aria-label={t.signals.panel} className={styles.collapsed}>
+        <IconButton label={t.signals.expand} icon="panelRight" onClick={onToggle} />
+        <span className={styles.verticalLabel}>{t.signals.vertical(signals.length)}</span>
       </aside>
     );
   }
 
   const activeTab = tab === 'all' || products.some((p) => p.id === tab) ? tab : 'all';
-  const tabs = [{ id: 'all' as const, label: 'All' }, ...products];
+  const tabs = [
+    { id: 'all' as const, label: t.common.all },
+    ...products.map((p) => ({ id: p.id, label: t.products[p.id] })),
+  ];
   const sortKey = SORTS.find((s) => s.id === sort)!.key;
   const list = signals
     .filter((s) => activeTab === 'all' || s.product === activeTab)
     .sort((a, b) => sortKey(a) - sortKey(b));
 
   return (
-    <aside aria-label="LAC signals" className={cx(styles.panel, inDrawer && styles.inDrawer)}>
+    <aside aria-label={t.signals.panel} className={cx(styles.panel, inDrawer && styles.inDrawer)}>
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <Icon name="signal" strokeWidth={2} className={styles.titleIcon} />
-          <h2 className={styles.title}>Signal</h2>
-          <IconButton label="Search signals" icon="search" strokeWidth={2} />
+          <h2 className={styles.title}>{t.signals.title}</h2>
+          <IconButton label={t.signals.search} icon="search" strokeWidth={2} />
           {inDrawer ? (
-            <IconButton label="Close signals" icon="close" strokeWidth={2} onClick={onToggle} />
+            <IconButton label={t.signals.close} icon="close" strokeWidth={2} onClick={onToggle} />
           ) : (
-            <IconButton label="Collapse signals" icon="panelRight" onClick={onToggle} />
+            <IconButton label={t.signals.collapse} icon="panelRight" onClick={onToggle} />
           )}
         </div>
-        <div role="group" aria-label="Signal product" className={styles.tabs}>
-          {tabs.map((t) => (
+        <div role="group" aria-label={t.signals.productGroup} className={styles.tabs}>
+          {tabs.map((item) => (
             <button
-              key={t.id}
+              key={item.id}
               type="button"
-              aria-pressed={activeTab === t.id}
-              className={cx(styles.tab, activeTab === t.id && styles.tabActive)}
-              onClick={() => setTab(t.id)}
+              aria-pressed={activeTab === item.id}
+              className={cx(styles.tab, activeTab === item.id && styles.tabActive)}
+              onClick={() => setTab(item.id)}
             >
-              {t.label}
+              {item.label}
             </button>
           ))}
         </div>
-        <div role="group" aria-label="Sort signals" className={styles.sorts}>
+        <div role="group" aria-label={t.signals.sortGroup} className={styles.sorts}>
           {SORTS.map((s) => (
             <button
               key={s.id}
@@ -84,25 +89,25 @@ export function SignalPanel({ variant = 'aside', open, onToggle, signals, produc
               className={cx(styles.sort, sort === s.id && styles.sortActive)}
               onClick={() => setSort(s.id)}
             >
-              {s.label}
+              {t.signals.sorts[s.id]}
             </button>
           ))}
         </div>
       </div>
 
       <div className={styles.list}>
-        {list.length === 0 && <p className={styles.empty}>No signals right now.</p>}
+        {list.length === 0 && <p className={styles.empty}>{t.signals.none}</p>}
         {list.map((s) => (
           <SignalCard key={s.id} signal={s} active={s.id === activeId} onSelect={() => onSelect(s)} />
         ))}
       </div>
 
       <div className={styles.footer}>
-        <span>Per page 10</span>
+        <span>{t.signals.perPage}</span>
         <span>{list.length ? `1–${list.length} / ${list.length}` : '0 / 0'}</span>
         <span className={styles.pager}>
-          <IconButton label="Previous page" icon="chevronLeft" iconSize={16} strokeWidth={2} variant="outline" disabled />
-          <IconButton label="Next page" icon="chevronRight" iconSize={16} strokeWidth={2} variant="outline" disabled />
+          <IconButton label={t.signals.previousPage} icon="chevronLeft" iconSize={16} strokeWidth={2} variant="outline" disabled />
+          <IconButton label={t.signals.nextPage} icon="chevronRight" iconSize={16} strokeWidth={2} variant="outline" disabled />
         </span>
       </div>
     </aside>

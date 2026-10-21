@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router';
 import { LANGUAGES, type Language } from '../../data/preferences';
+import { useT, type Messages } from '../../i18n';
 import { cx } from '../../lib/cx';
 import type { CategoryItem } from '../../lib/markets';
 import type { DataMode } from '../../lib/live';
@@ -8,24 +9,26 @@ import { Icon, type IconName } from '../ui/Icon';
 import { IconButton } from '../ui/IconButton';
 import styles from './Sidebar.module.css';
 
+type NavKey = keyof Messages['nav'];
+
 interface NavItem {
   to: string;
-  label: string;
+  key: NavKey & ('prediction' | 'signal' | 'stocks' | 'products' | 'referral' | 'settings');
   icon: IconName;
 }
 
 const NAV_TOP: NavItem[] = [
-  { to: '/prediction', label: 'Prediction', icon: 'prediction' },
-  { to: '/signal', label: 'Signal', icon: 'signal' },
+  { to: '/prediction', key: 'prediction', icon: 'prediction' },
+  { to: '/signal', key: 'signal', icon: 'signal' },
 ];
 
 const NAV_BOTTOM: NavItem[] = [
-  { to: '/stocks', label: 'Stocks', icon: 'stocks' },
-  { to: '/products', label: 'Products', icon: 'products' },
-  { to: '/referral', label: 'Referral rewards', icon: 'gift' },
+  { to: '/stocks', key: 'stocks', icon: 'stocks' },
+  { to: '/products', key: 'products', icon: 'products' },
+  { to: '/referral', key: 'referral', icon: 'gift' },
 ];
 
-const SETTINGS: NavItem = { to: '/settings', label: 'Settings', icon: 'gear' };
+const SETTINGS: NavItem = { to: '/settings', key: 'settings', icon: 'gear' };
 
 interface SidebarProps {
   /** `drawer`: always expanded, fills the mobile drawer, and its toggle closes the drawer. */
@@ -40,6 +43,7 @@ interface SidebarProps {
   categoryHeading: string;
   onPickCategory: (id: string) => void;
   language: Language;
+  onToggleLanguage: () => void;
   dataMode: DataMode;
   onDataMode: (mode: DataMode) => void;
 }
@@ -57,10 +61,16 @@ function Logo() {
 }
 
 function ModeSwitch({ dataMode, onDataMode }: Pick<SidebarProps, 'dataMode' | 'onDataMode'>) {
-  return <div className={styles.modeSwitch} role="group" aria-label="Data mode">
-    {(['demo', 'live'] as const).map(mode => <button key={mode} type="button" aria-pressed={dataMode === mode}
-      onClick={() => onDataMode(mode)}>{mode === 'demo' ? 'Demo' : 'Live'}</button>)}
-  </div>;
+  const t = useT();
+  return (
+    <div className={styles.modeSwitch} role="group" aria-label={t.nav.dataMode}>
+      {(['demo', 'live'] as const).map((mode) => (
+        <button key={mode} type="button" aria-pressed={dataMode === mode} onClick={() => onDataMode(mode)}>
+          {t.common[mode]}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function ExpandedSidebar({
@@ -72,10 +82,13 @@ function ExpandedSidebar({
   categoryHeading,
   onPickCategory,
   language,
+  onToggleLanguage,
   dataMode,
   onDataMode,
 }: SidebarProps) {
+  const t = useT();
   const lang = LANGUAGES.find((l) => l.value === language) ?? LANGUAGES[0];
+  const other = LANGUAGES.find((l) => l.value !== language) ?? LANGUAGES[0];
   const link = (item: NavItem) => (
     <NavLink
       key={item.to}
@@ -84,25 +97,25 @@ function ExpandedSidebar({
       className={({ isActive }) => cx(styles.item, isActive && styles.itemActive)}
     >
       <Icon name={item.icon} />
-      <span>{item.label}</span>
+      <span>{t.nav[item.key]}</span>
     </NavLink>
   );
 
   const inDrawer = variant === 'drawer';
 
   return (
-    <nav aria-label="Main navigation" className={cx(styles.sidebar, inDrawer && styles.inDrawer)}>
+    <nav aria-label={t.nav.mainNav} className={cx(styles.sidebar, inDrawer && styles.inDrawer)}>
       <div className={styles.brand}>
         <Logo />
         <span className={styles.brandText}>
           <span className={styles.brandName}>LAC</span>
-          <span className={styles.brandTagline}>Prediction terminal</span>
+          <span className={styles.brandTagline}>{t.nav.tagline}</span>
           <ModeSwitch dataMode={dataMode} onDataMode={onDataMode} />
         </span>
         {inDrawer ? (
-          <IconButton label="Close menu" icon="close" strokeWidth={2} onClick={onToggle} />
+          <IconButton label={t.nav.closeMenu} icon="close" strokeWidth={2} onClick={onToggle} />
         ) : (
-          <IconButton label="Collapse menu" icon="panelLeft" onClick={onToggle} />
+          <IconButton label={t.nav.collapse} icon="panelLeft" onClick={onToggle} />
         )}
       </div>
 
@@ -110,7 +123,7 @@ function ExpandedSidebar({
         {NAV_TOP.map(link)}
         <button type="button" aria-haspopup="dialog" className={cx(styles.item, styles.buy)} onClick={onBuyUsdt}>
           <Icon name="usdt" />
-          <span>Buy USDT</span>
+          <span>{t.nav.buyUsdt}</span>
         </button>
         {NAV_BOTTOM.map(link)}
       </div>
@@ -139,9 +152,15 @@ function ExpandedSidebar({
         <div className={styles.account}>
           <Button variant="dark" className={styles.signIn}>
             <Icon name="user" size={18} />
-            <span>Sign in</span>
+            <span>{t.nav.signIn}</span>
           </Button>
-          <button type="button" className={styles.language} aria-label={`Language: ${lang.label}`}>
+          <button
+            type="button"
+            className={styles.language}
+            aria-label={t.nav.switchLanguage(other.label)}
+            title={t.nav.switchLanguage(other.label)}
+            onClick={onToggleLanguage}
+          >
             {lang.short}
           </button>
         </div>
@@ -151,13 +170,14 @@ function ExpandedSidebar({
 }
 
 function CollapsedSidebar({ onToggle, onNavigate, onBuyUsdt, categories, onPickCategory, dataMode, onDataMode }: SidebarProps) {
+  const t = useT();
   const link = (item: NavItem) => (
     <NavLink
       key={item.to}
       to={item.to}
       onClick={onNavigate}
-      aria-label={item.label}
-      title={item.label}
+      aria-label={t.nav[item.key]}
+      title={t.nav[item.key]}
       className={({ isActive }) => cx(styles.railItem, isActive && styles.railItemActive)}
     >
       <Icon name={item.icon} />
@@ -165,16 +185,16 @@ function CollapsedSidebar({ onToggle, onNavigate, onBuyUsdt, categories, onPickC
   );
 
   return (
-    <nav aria-label="Main navigation" className={styles.rail}>
+    <nav aria-label={t.nav.mainNav} className={styles.rail}>
       <Logo />
       <ModeSwitch dataMode={dataMode} onDataMode={onDataMode} />
-      <IconButton label="Expand menu" icon="panelLeft" onClick={onToggle} />
+      <IconButton label={t.nav.expand} icon="panelLeft" onClick={onToggle} />
       {NAV_TOP.map(link)}
       <button
         type="button"
         aria-haspopup="dialog"
-        aria-label="Buy USDT"
-        title="Buy USDT"
+        aria-label={t.nav.buyUsdt}
+        title={t.nav.buyUsdt}
         className={cx(styles.railItem, styles.buy)}
         onClick={onBuyUsdt}
       >

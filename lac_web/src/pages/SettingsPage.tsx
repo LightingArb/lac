@@ -1,12 +1,17 @@
-import { useRef, useState } from 'react';
-import { Button } from '../components/ui/Button';
+import { useState, type MouseEvent } from 'react';
+import { Link } from 'react-router';
+import { Button, buttonClass } from '../components/ui/Button';
 import { Page, PageHeader } from '../components/ui/Page';
 import { Panel } from '../components/ui/Panel';
 import { SegmentedControl } from '../components/ui/SegmentedControl';
 import { TextField } from '../components/ui/TextField';
 import { LANGUAGES, THEMES, type Preferences } from '../data/preferences';
+import { useT } from '../i18n';
 import { normalizeReferralCode, referralLink } from '../data/referral';
 import styles from './SettingsPage.module.css';
+
+// Legal pages are not written yet; keep the links from changing the route.
+const noPage = (e: MouseEvent<HTMLAnchorElement>) => e.preventDefault();
 
 interface SettingsPageProps {
   referralCode: string;
@@ -21,31 +26,33 @@ export function SettingsPage({
   preferences,
   onPreferencesChange,
 }: SettingsPageProps) {
+  const t = useT();
+  const st = t.settings;
+  const themes = THEMES.map((theme) => ({ value: theme.value, label: st.themes[theme.value] }));
   const [walletConnected, setWalletConnected] = useState(false);
-  const [apiSaved, setApiSaved] = useState(false);
-  const apiForm = useRef<HTMLFormElement>(null);
+  const [tradingEnabled, setTradingEnabled] = useState(false);
   const [draft, setDraft] = useState(referralCode);
   const [saved, setSaved] = useState(false);
   const canSave = draft !== '' && draft !== referralCode;
 
   return (
-    <Page label="Settings" width="narrow">
-      <PageHeader title="Settings" className={styles.header} />
+    <Page label={st.title} width="narrow">
+      <PageHeader title={st.title} className={styles.header} />
 
       <Panel>
-        <h2 className={styles.sectionTitle}>Profile</h2>
-        <TextField label="Email" type="email" value="you@example.com" readOnly />
-        <TextField label="Display name" type="text" placeholder="Your name" />
+        <h2 className={styles.sectionTitle}>{st.profile}</h2>
+        <TextField label={st.email} type="email" value="you@example.com" readOnly />
+        <TextField label={st.displayName} type="text" placeholder={st.namePlaceholder} />
       </Panel>
 
       <Panel>
         <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>Referral code</h2>
-          <span className={styles.hint}>Used in your referral link. Letters and numbers only, up to 16.</span>
+          <h2 className={styles.sectionTitle}>{st.referralCode}</h2>
+          <span className={styles.hint}>{st.codeHint}</span>
         </div>
         <div className={styles.inline}>
           <TextField
-            label="Code"
+            label={st.code}
             value={draft}
             autoComplete="off"
             className={styles.grow}
@@ -62,91 +69,86 @@ export function SettingsPage({
               setSaved(true);
             }}
           >
-            Save
+            {t.common.save}
           </Button>
         </div>
         <span className={styles.hint}>
-          Your link: <strong className={styles.link}>{referralLink(referralCode)}</strong>
+          {st.yourLink} <strong className={styles.link}>{referralLink(referralCode)}</strong>
         </span>
-        {saved && <span className={styles.saved}>Saved. Your referral link now uses this code.</span>}
+        {saved && <span className={styles.saved}>{st.codeSaved}</span>}
       </Panel>
 
       <Panel>
-        <h2 className={styles.sectionTitle}>Polymarket trading</h2>
-        <p className={styles.hint}>
-          Your wallet signs each order and your API key sends it; LAC adds its builder code to every order.
-        </p>
+        <h2 className={styles.sectionTitle}>{st.trading}</h2>
+        <p className={styles.hint}>{st.tradingHint}</p>
         <div className={styles.prefRow}>
           <span>
-            <strong>Wallet</strong>
+            <strong>{st.wallet}</strong>
             <br />
-            {walletConnected ? 'Connected · 0x8f3a…41c2' : 'Not connected'}
+            {walletConnected ? st.connected('0x8f3a…41c2') : st.notConnected}
           </span>
-          <Button onClick={() => setWalletConnected(!walletConnected)}>
-            {walletConnected ? 'Disconnect' : 'Connect wallet'}
+          <Button
+            variant={walletConnected ? 'secondary' : 'primary'}
+            onClick={() => {
+              setWalletConnected(!walletConnected);
+              setTradingEnabled(false);
+            }}
+          >
+            {walletConnected ? st.disconnect : st.connect}
           </Button>
         </div>
-        <form
-          ref={apiForm}
-          className={styles.apiForm}
-          autoComplete="off"
-          onSubmit={(e) => {
-            e.preventDefault();
-            apiForm.current?.reset();
-            setApiSaved(true);
-          }}
-        >
-          <TextField label="API key" type="password" autoComplete="off" onChange={() => setApiSaved(false)} />
-          <TextField label="API secret" type="password" autoComplete="off" onChange={() => setApiSaved(false)} />
-          <TextField label="Passphrase" type="password" autoComplete="off" onChange={() => setApiSaved(false)} />
-          <Button type="submit">Save API key</Button>
-        </form>
-        <a href="https://docs.polymarket.com/" target="_blank" rel="noopener noreferrer" className={styles.textLink}>
-          Where to find your API key
-        </a>
-        <span className={styles.hint}>
-          {apiSaved
-            ? 'Demo only. API credentials were cleared and are not stored.'
-            : 'Demo only. No wallet connection or API credentials are stored.'}
-        </span>
+        <div className={styles.prefRow}>
+          <span>
+            <strong>{st.tradingKey}</strong>
+            <br />
+            {tradingEnabled ? st.tradingOn('019a…c3f1') : walletConnected ? st.tradingOff : st.needWallet}
+          </span>
+          {!tradingEnabled && (
+            <Button disabled={!walletConnected} onClick={() => setTradingEnabled(true)}>
+              {st.enableTrading}
+            </Button>
+          )}
+        </div>
+        <span className={styles.hint}>{st.signNote}</span>
+        <span className={styles.hint}>{st.tradingDemo}</span>
       </Panel>
 
       <Panel>
         <div className={styles.sectionHead}>
-          <h2 className={styles.sectionTitle}>Telegram</h2>
-          <span className={styles.hint}>Link your Telegram account to receive LAC signals there.</span>
+          <h2 className={styles.sectionTitle}>{st.telegram}</h2>
+          <span className={styles.hint}>{st.telegramHint}</span>
         </div>
         <div className={styles.inline}>
           <TextField
-            label="Telegram UID"
+            label={st.telegramUid}
             type="text"
             inputMode="numeric"
-            placeholder="e.g. 123456789"
+            placeholder={st.uidPlaceholder}
             className={styles.grow}
           />
-          <Button>Link Telegram</Button>
+          <Button>{st.linkTelegram}</Button>
         </div>
         <a href="https://t.me/" target="_blank" rel="noopener noreferrer" className={styles.textLink}>
-          Telegram support
+          {st.telegramSupport}
         </a>
       </Panel>
 
       <Panel>
-        <h2 className={styles.sectionTitle}>Preferences</h2>
+        <h2 className={styles.sectionTitle}>{st.preferences}</h2>
         <div className={styles.prefRow}>
-          <span className={styles.prefLabel}>Language</span>
+          <span className={styles.prefLabel}>{st.language}</span>
           <SegmentedControl
-            label="Language"
+            label={st.language}
             options={LANGUAGES}
             value={preferences.language}
             onChange={(language) => onPreferencesChange({ ...preferences, language })}
           />
         </div>
         <div className={styles.prefRow}>
-          <span className={styles.prefLabel}>Theme</span>
+          <span className={styles.prefLabel}>{st.theme}</span>
           <SegmentedControl
-            label="Theme"
-            options={THEMES}
+            label={st.theme}
+            options={themes}
             value={preferences.theme}
             onChange={(theme) => onPreferencesChange({ ...preferences, theme })}
           />
@@ -154,16 +156,26 @@ export function SettingsPage({
       </Panel>
 
       <Panel className={styles.legal}>
-        <h2 className={styles.sectionTitle}>Legal</h2>
-        <a href="#terms" className={styles.legalLink}>
-          Terms of service
+        <h2 className={styles.sectionTitle}>{st.legal}</h2>
+        <a href="#terms" className={styles.legalLink} onClick={noPage}>
+          {st.terms}
         </a>
-        <a href="#privacy" className={styles.legalLink}>
-          Privacy policy
+        <a href="#privacy" className={styles.legalLink} onClick={noPage}>
+          {st.privacy}
         </a>
-        <a href="#risk" className={styles.legalLink}>
-          Risk disclosure
+        <a href="#risk" className={styles.legalLink} onClick={noPage}>
+          {st.risk}
         </a>
+      </Panel>
+
+      <Panel>
+        <div className={styles.sectionHead}>
+          <h2 className={styles.sectionTitle}>{st.office}</h2>
+          <span className={styles.hint}>{st.officeHint}</span>
+        </div>
+        <Link to="/admin" className={buttonClass('dark', false, styles.officeLink)}>
+          {st.openOffice}
+        </Link>
       </Panel>
     </Page>
   );

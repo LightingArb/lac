@@ -12,6 +12,7 @@ import {
   type Side,
   type Signal,
 } from '../data/catalog';
+import type { Messages } from '../i18n/en';
 
 export type WorkspaceMode = 'prediction' | 'signal';
 export type SignalCategoryId = 'trending' | ProductId;
@@ -103,6 +104,7 @@ export function deriveWorkspace(
   mode: WorkspaceMode,
   state: WorkspaceState,
   plan: Record<ProductId, boolean>,
+  t: Messages,
 ): Workspace {
   const query = state.query.trim().toLowerCase();
   const searching = query !== '';
@@ -125,7 +127,7 @@ export function deriveWorkspace(
     const active = state.predictionCategory;
     const categories = CATEGORIES.map((c) => ({
       id: c.id,
-      label: c.label,
+      label: t.categories[c.id],
       icon: c.icon,
       count:
         c.id === 'trending' ? EVENTS.filter((e) => e.trending).length : EVENTS.filter((e) => e.cat === c.id).length,
@@ -138,9 +140,9 @@ export function deriveWorkspace(
       ...shared,
       categories,
       activeCategory: active,
-      categoryLabel: CATEGORIES.find((c) => c.id === active)?.label ?? 'Trending',
+      categoryLabel: t.categories[active],
       events,
-      emptyText: 'No events match this search.',
+      emptyText: t.markets.noMatch,
       selected: EVENTS_BY_ID[state.predictionEventId] ?? EVENTS[0],
       highlight: null,
     };
@@ -150,7 +152,7 @@ export function deriveWorkspace(
     state.signalCategory === 'trending' || visibleIds.has(state.signalCategory) ? state.signalCategory : 'trending';
   const categories = [CATEGORIES[0], ...visibleProducts].map((c) => ({
     id: c.id,
-    label: c.label,
+    label: c.id === 'trending' ? t.categories.trending : t.products[c.id as ProductId],
     icon: c.icon,
     count:
       c.id === 'trending'
@@ -171,9 +173,9 @@ export function deriveWorkspace(
     ...shared,
     categories,
     activeCategory: active,
-    categoryLabel: active === 'trending' ? 'Trending' : (visibleProducts.find((p) => p.id === active)?.label ?? ''),
+    categoryLabel: active === 'trending' ? t.categories.trending : t.products[active],
     events,
-    emptyText: visibleProducts.length ? 'No events match this search.' : 'No signal categories in this plan right now.',
+    emptyText: visibleProducts.length ? t.markets.noMatch : t.markets.noPlan,
     selected,
     highlight: picked && selected && picked.eventId === selected.id ? picked : null,
   };

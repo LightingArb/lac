@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import type { MarketEvent } from '../data/catalog';
 import { EventDetail } from '../components/markets/EventDetail';
 import { EventList } from '../components/markets/EventList';
+import { useT } from '../i18n';
 import { marketAnchorId, type Workspace } from '../lib/markets';
 import styles from './MarketsPage.module.css';
 
@@ -19,6 +20,7 @@ interface MarketsPageProps {
  * the content area is narrow (see the container query in MarketsPage.module.css).
  */
 export function MarketsPage({ workspace: ws, onSelectEvent, listFooter, detailFooter, error }: MarketsPageProps) {
+  const t = useT();
   const isSignal = ws.mode === 'signal';
   const layoutRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLElement>(null);
@@ -45,7 +47,7 @@ export function MarketsPage({ workspace: ws, onSelectEvent, listFooter, detailFo
   return (
     <div ref={layoutRef} className={styles.workspace}>
       <EventList
-        title={ws.searching ? 'Search results' : ws.categoryLabel}
+        title={ws.searching ? t.markets.searchResults : ws.categoryLabel}
         events={ws.events}
         emptyText={ws.emptyText}
         footer={listFooter}

@@ -1,4 +1,5 @@
 import { Fragment } from 'react';
+import { useT } from '../../i18n';
 import { cx } from '../../lib/cx';
 import { Icon } from '../ui/Icon';
 import { IconButton } from '../ui/IconButton';
@@ -18,10 +19,11 @@ interface TopBarProps {
 }
 
 export function TopBar({ trail, current, search, onOpenMenu, signals }: TopBarProps) {
+  const t = useT();
   return (
     <div className={styles.topBar}>
-      {onOpenMenu && <IconButton label="Open menu" icon="menu" aria-haspopup="dialog" onClick={onOpenMenu} />}
-      <nav aria-label="Breadcrumb" className={cx(styles.breadcrumb, current && styles.hasCurrent)}>
+      {onOpenMenu && <IconButton label={t.nav.openMenu} icon="menu" aria-haspopup="dialog" onClick={onOpenMenu} />}
+      <nav aria-label={t.topBar.breadcrumb} className={cx(styles.breadcrumb, current && styles.hasCurrent)}>
         {trail.map((crumb, i) => (
           <Fragment key={i}>
             {i > 0 && <Separator />}
@@ -41,7 +43,7 @@ export function TopBar({ trail, current, search, onOpenMenu, signals }: TopBarPr
         <button
           type="button"
           aria-haspopup="dialog"
-          aria-label={`${signals.count} signals`}
+          aria-label={t.topBar.signalCount(signals.count)}
           className={styles.signalsButton}
           onClick={signals.onOpen}
         >
@@ -51,15 +53,15 @@ export function TopBar({ trail, current, search, onOpenMenu, signals }: TopBarPr
       )}
       {search && (
         <>
-          <IconButton label="Filter events" icon="filter" variant="outline" />
+          <IconButton label={t.topBar.filter} icon="filter" variant="outline" />
           <label className={styles.search}>
             <Icon name="search" size={18} strokeWidth={2} />
             <input
               type="search"
               value={search.value}
               onChange={(e) => search.onChange(e.target.value)}
-              placeholder="Search markets"
-              aria-label="Search markets"
+              placeholder={t.topBar.search}
+              aria-label={t.topBar.search}
               className={styles.searchInput}
             />
           </label>

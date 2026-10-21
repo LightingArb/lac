@@ -1,5 +1,14 @@
 /** Stroke icons drawn on a 24×24 grid, as used across the design. */
 const PATHS = {
+  dashboard: 'M4 4h7v9H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 15h7v5H4z',
+  wallet: 'M4 7a2 2 0 0 1 2-2h12v4M4 7v11a2 2 0 0 0 2 2h14V9H6a2 2 0 0 1-2-2zM16 14.5h.01',
+  users: 'M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M18 14.5a7 7 0 0 1 4 6.5',
+  tree: 'M9 3h6v5H9zM3 16h6v5H3zM15 16h6v5h-6zM12 8v4M6 16v-4h12v4',
+  tag: 'M3 12V4h8l10 10-8 8zM7.5 8.5h.01',
+  receipt: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3',
+  file: 'M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6',
+  shield: 'M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6zM9 12l2 2 4-4',
+  copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
   logo: 'M13 2 4 14h7l-1 8 9-12h-7l1-8z',
   menu: 'M4 7h16M4 12h16M4 17h16',
   panelLeft: 'M4 4h16v16H4zM9 4v16',

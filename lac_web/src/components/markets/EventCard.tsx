@@ -1,6 +1,7 @@
 import type { MarketEvent } from '../../data/catalog';
 import { cx } from '../../lib/cx';
-import { chance, cents, multiplier, plural } from '../../lib/format';
+import { useT } from '../../i18n';
+import { chance, cents, multiplier } from '../../lib/format';
 import { Icon } from '../ui/Icon';
 import { EventBadge } from './EventBadge';
 import { LiveIndicator, TeamAvatar } from './MatchParts';
@@ -18,6 +19,7 @@ interface EventCardProps {
 const PREVIEW_OUTCOMES = 3;
 
 export function EventCard({ event, selected, showPath, signalCount, onSelect }: EventCardProps) {
+  const t = useT();
   return (
     <button
       id={`event-${event.id}`}
@@ -33,7 +35,7 @@ export function EventCard({ event, selected, showPath, signalCount, onSelect }: 
           {showPath && event.lac && <span className={styles.path}>{event.lac.path}</span>}
         </span>
         <span className={styles.ends}>
-          <span>{event.endDate}</span>
+          <span>{t.date(event.endDate)}</span>
           <span>{event.endTime}</span>
         </span>
       </span>
@@ -43,7 +45,7 @@ export function EventCard({ event, selected, showPath, signalCount, onSelect }: 
       {signalCount > 0 && (
         <span className={styles.signals}>
           <Icon name="signal" size={14} strokeWidth={2.2} />
-          <span>{plural(signalCount, 'positive-EV signal', 'positive-EV signals')}</span>
+          <span>{t.markets.signalCount(signalCount)}</span>
         </span>
       )}
     </button>
@@ -51,6 +53,7 @@ export function EventCard({ event, selected, showPath, signalCount, onSelect }: 
 }
 
 function OutcomePreview({ event }: { event: MarketEvent }) {
+  const t = useT();
   const rows =
     event.kind === 'multi'
       ? [...event.rows]
@@ -58,8 +61,8 @@ function OutcomePreview({ event }: { event: MarketEvent }) {
           .slice(0, PREVIEW_OUTCOMES)
           .map((r) => ({ id: r.id, label: r.label, p: r.yes }))
       : [
-          { id: 'yes', label: event.yesLabel ?? 'Yes', p: event.rows[0]?.yes ?? null },
-          { id: 'no', label: event.noLabel ?? 'No', p: event.rows[0]?.no ?? null },
+          { id: 'yes', label: t.side(event.yesLabel ?? 'Yes'), p: event.rows[0]?.yes ?? null },
+          { id: 'no', label: t.side(event.noLabel ?? 'No'), p: event.rows[0]?.no ?? null },
         ];
   const more = event.kind === 'multi' ? (event.marketCount ?? event.rows.length) - PREVIEW_OUTCOMES : 0;
 
@@ -78,12 +81,13 @@ function OutcomePreview({ event }: { event: MarketEvent }) {
           </span>
         </span>
       ))}
-      {more > 0 && <span className={styles.more}>+{more} more outcomes</span>}
+      {more > 0 && <span className={styles.more}>{t.markets.moreOutcomes(more)}</span>}
     </span>
   );
 }
 
 function MatchPreview({ event }: { event: MarketEvent }) {
+  const t = useT();
   const m = event.match!;
   const { yes, no } = event.rows[0];
   return (
@@ -95,7 +99,7 @@ function MatchPreview({ event }: { event: MarketEvent }) {
         <span className={styles.teamMult}>{multiplier(yes)}</span>
       </span>
       <span className={styles.team}>
-        <LiveIndicator>LIVE</LiveIndicator>
+        <LiveIndicator>{t.markets.live}</LiveIndicator>
         <span className={styles.score}>
           {m.scoreA} : {m.scoreB}
         </span>

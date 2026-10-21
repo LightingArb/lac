@@ -1,0 +1,35 @@
+.center {
+  text-align: center !important;
+}
+
+.yes {
+  display: inline-flex;
+  color: var(--color-success);
+}
+
+.log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.when {
+  width: 150px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.who {
+  width: 90px;
+  font-weight: 600;
+}

@@ -103,7 +103,7 @@
 
 .buy,
 .buy:hover {
-  color: var(--color-success);
+  color: var(--color-text);
   font-weight: 600;
 }
 
@@ -236,5 +236,5 @@
 
 .railItem.buy,
 .railItem.buy:hover {
-  color: var(--color-success);
+  color: var(--color-text);
 }

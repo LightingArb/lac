@@ -1,0 +1,23 @@
+.root td {
+  background: var(--color-surface-muted);
+}
+
+.name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.elbow {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-bottom: 1.5px solid var(--color-border-strong);
+  border-left: 1.5px solid var(--color-border-strong);
+  transform: translateY(-3px);
+}
+
+.total td {
+  border-top: 1px solid var(--color-border);
+  font-weight: 700;
+}

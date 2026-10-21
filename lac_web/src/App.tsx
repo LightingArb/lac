@@ -6,8 +6,11 @@ import { TopBar } from './components/layout/TopBar';
 import { SignalPanel } from './components/signals/SignalPanel';
 import { Drawer } from './components/ui/Drawer';
 import { CUSTOMER_PLAN, type CategoryId } from './data/catalog';
-import { DEFAULT_PREFERENCES, type Preferences } from './data/preferences';
+import type { Preferences } from './data/preferences';
 import { DEFAULT_REFERRAL_CODE, MY_AGENTS } from './data/referral';
+import type { Backend } from './data/backend';
+import type { WithdrawalDraft } from './data/withdrawals';
+import { useT } from './i18n';
 import {
   INITIAL_WORKSPACE,
   deriveWorkspace,
@@ -26,21 +29,29 @@ import styles from './App.module.css';
 
 type Mode = 'prediction' | 'signal' | 'stocks' | 'products' | 'referral' | 'settings';
 
-const MODE_LABELS: Record<Mode, string> = {
-  prediction: 'Prediction',
-  signal: 'Signal',
-  stocks: 'Stocks',
-  products: 'Products',
-  referral: 'Referral rewards',
-  settings: 'Settings',
-};
+const MODES: Mode[] = ['prediction', 'signal', 'stocks', 'products', 'referral', 'settings'];
 
 function modeFromPath(pathname: string): Mode {
-  const segment = pathname.split('/')[1];
-  return segment in MODE_LABELS ? (segment as Mode) : 'prediction';
+  const segment = pathname.split('/')[1] as Mode;
+  return MODES.includes(segment) ? segment : 'prediction';
 }
 
-export default function App() {
+interface AppProps {
+  backend: Backend;
+  onWithdraw: (draft: WithdrawalDraft) => void;
+  preferences: Preferences;
+  onPreferencesChange: (preferences: Preferences) => void;
+  onToggleLanguage: () => void;
+}
+
+export default function App({
+  backend,
+  onWithdraw,
+  preferences,
+  onPreferencesChange,
+  onToggleLanguage,
+}: AppProps) {
+  const t = useT();
   const mode = modeFromPath(useLocation().pathname);
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const signalsInDrawer = useMediaQuery(COMPACT_QUERY);
@@ -53,7 +64,6 @@ export default function App() {
   const [state, setState] = useState<WorkspaceState>(INITIAL_WORKSPACE);
   const [agents, setAgents] = useState(MY_AGENTS);
   const [referralCode, setReferralCode] = useState(DEFAULT_REFERRAL_CODE);
-  const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [dataMode, setDataMode] = useState<DataMode>('demo');
   const [liveCategory, setLiveCategory] = useState('trending');
   const [liveQuery, setLiveQuery] = useState('');
@@ -72,9 +82,9 @@ export default function App() {
   const demoWorkspace = useMemo(
     () =>
       dataMode === 'demo' && (mode === 'prediction' || mode === 'signal')
-        ? deriveWorkspace(mode, state, CUSTOMER_PLAN)
+        ? deriveWorkspace(mode, state, CUSTOMER_PLAN, t)
         : null,
-    [mode, state, dataMode],
+    [mode, state, dataMode, t],
   );
 
   const workspace = dataMode === 'live' ? live.workspace : demoWorkspace;
@@ -112,13 +122,13 @@ export default function App() {
       error={live.error}
       listFooter={
         dataMode === 'live' && (
-          <nav className={styles.pagination} aria-label="Event pages">
+          <nav className={styles.pagination} aria-label={t.app.eventPages}>
             <button disabled={live.page === 1} onClick={live.previous}>
-              Previous
+              {t.common.previous}
             </button>
-            <span>Page {live.page}</span>
+            <span>{t.app.page(live.page)}</span>
             <button disabled={!live.hasNext} onClick={live.next}>
-              Next
+              {t.common.next}
             </button>
           </nav>
         )
@@ -126,15 +136,13 @@ export default function App() {
       detailFooter={
         dataMode === 'live' &&
         live.marketCount > 50 && (
-          <nav className={styles.pagination} aria-label="Market pages">
+          <nav className={styles.pagination} aria-label={t.app.marketPages}>
             <button disabled={live.marketPage === 1} onClick={live.previousMarket}>
-              Previous markets
+              {t.app.previousMarkets}
             </button>
-            <span>
-              Page {live.marketPage} · {live.marketCount} markets
-            </span>
+            <span>{t.app.marketPage(live.marketPage, live.marketCount)}</span>
             <button disabled={!live.hasNextMarket} onClick={live.nextMarket}>
-              Next markets
+              {t.app.nextMarkets}
             </button>
           </nav>
         )
@@ -159,12 +167,13 @@ export default function App() {
       setBuyOpen(true);
     },
     categories: workspace?.categories ?? null,
-    categoryHeading: mode === 'signal' ? 'Signal categories' : 'Categories',
+    categoryHeading: mode === 'signal' ? t.nav.signalCategories : t.nav.categories,
     onPickCategory: (id: string) => {
       pickCategory(id);
       setMenuDrawerOpen(false);
     },
     language: preferences.language,
+    onToggleLanguage,
     dataMode,
     onDataMode: setDataMode,
   };
@@ -178,7 +187,7 @@ export default function App() {
   return (
     <div className={styles.shell}>
       {isMobile ? (
-        <Drawer open={menuDrawerOpen} onClose={() => setMenuDrawerOpen(false)} label="Menu">
+        <Drawer open={menuDrawerOpen} onClose={() => setMenuDrawerOpen(false)} label={t.nav.menu}>
           <Sidebar variant="drawer" open onToggle={() => setMenuDrawerOpen(false)} {...sidebarProps} />
         </Drawer>
       ) : (
@@ -189,8 +198,8 @@ export default function App() {
         <TopBar
           trail={
             workspace
-              ? [MODE_LABELS[mode], workspace.searching ? 'Search' : workspace.categoryLabel]
-              : [MODE_LABELS[mode]]
+              ? [t.nav[mode], workspace.searching ? t.common.search : workspace.categoryLabel]
+              : [t.nav[mode]]
           }
           current={workspace?.selected?.title ?? null}
           search={
@@ -214,17 +223,25 @@ export default function App() {
             path="signal"
             element={
               dataMode === 'live' ? (
-                <div style={{ padding: '40px', color: 'var(--color-text-muted)' }}>No LAC signals in Live demo</div>
+                <div style={{ padding: '40px', color: 'var(--color-text-muted)' }}>{t.app.noLiveSignals}</div>
               ) : (
                 marketsPage
               )
             }
           />
           <Route path="stocks" element={<StocksPage />} />
-          <Route path="products" element={<ProductsPage />} />
+          <Route path="products" element={<ProductsPage items={backend.items} versions={backend.versions} />} />
           <Route
             path="referral"
-            element={<ReferralPage code={referralCode} agents={agents} onAgentsChange={setAgents} />}
+            element={
+              <ReferralPage
+                code={referralCode}
+                agents={agents}
+                onAgentsChange={setAgents}
+                withdrawals={backend.withdrawals}
+                onWithdraw={onWithdraw}
+              />
+            }
           />
           <Route
             path="settings"
@@ -233,7 +250,7 @@ export default function App() {
                 referralCode={referralCode}
                 onReferralCodeChange={setReferralCode}
                 preferences={preferences}
-                onPreferencesChange={setPreferences}
+                onPreferencesChange={onPreferencesChange}
               />
             }
           />
@@ -244,7 +261,7 @@ export default function App() {
       {mode === 'signal' &&
         signalPanelProps &&
         (signalsInDrawer ? (
-          <Drawer open={signalsDrawerOpen} onClose={() => setSignalsDrawerOpen(false)} side="right" label="LAC signals">
+          <Drawer open={signalsDrawerOpen} onClose={() => setSignalsDrawerOpen(false)} side="right" label={t.signals.panel}>
             <SignalPanel
               variant="drawer"
               open

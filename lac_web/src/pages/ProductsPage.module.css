@@ -125,3 +125,9 @@
   color: var(--color-text-secondary);
   font-size: 14px;
 }
+
+.includes {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}

@@ -83,11 +83,6 @@
   font-weight: 500;
 }
 
-.apiForm {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.apiForm button {
+.officeLink {
   align-self: flex-start;
 }

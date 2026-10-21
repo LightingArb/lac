@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { MarketEvent } from '../../data/catalog';
+import { useT, type Messages } from '../../i18n';
 import { chance } from '../../lib/format';
 import { priceSeries } from '../../lib/series';
 import { useLive, type History } from '../../lib/live';
@@ -8,25 +9,10 @@ import styles from './PriceChart.module.css';
 
 type Range = '1H' | '6H' | '1D' | '1W' | '1M' | 'ALL';
 
-const RANGES: { value: Range; label: string }[] = [
-  { value: '1H', label: '1H' },
-  { value: '6H', label: '6H' },
-  { value: '1D', label: '1D' },
-  { value: '1W', label: '1W' },
-  { value: '1M', label: '1M' },
-  { value: 'ALL', label: 'All' },
-];
+const RANGE_IDS: Range[] = ['1H', '6H', '1D', '1W', '1M', 'ALL'];
 
 /** How many of the 96 history points each range shows. */
 const RANGE_POINTS: Record<Range, number> = { '1H': 12, '6H': 24, '1D': 40, '1W': 64, '1M': 80, ALL: 96 };
-
-const X_LABELS: Record<Exclude<Range, 'ALL'>, string[]> = {
-  '1H': ['60m ago', '40m', '20m', 'Now'],
-  '6H': ['6h ago', '4h', '2h', 'Now'],
-  '1D': ['24h ago', '16h', '8h', 'Now'],
-  '1W': ['7d ago', '5d', '2d', 'Now'],
-  '1M': ['30d ago', '20d', '10d', 'Now'],
-};
 
 const SERIES_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)'];
 const GRID_LINES = [0, 50, 100, 150];
@@ -40,7 +26,7 @@ interface Line {
   color: string;
 }
 
-function chartLines(event: MarketEvent): Line[] {
+function chartLines(event: MarketEvent, t: Messages): Line[] {
   if (event.kind === 'multi') {
     return [...event.rows]
       .sort((a, b) => (b.yes ?? -1) - (a.yes ?? -1))
@@ -55,8 +41,8 @@ function chartLines(event: MarketEvent): Line[] {
   const row = event.rows[0];
   const yes = priceSeries(`${event.id}/${row.id}`, row.yes!);
   return [
-    { label: event.yesLabel ?? 'Yes', points: yes, end: row.yes, color: SERIES_COLORS[0] },
-    { label: event.noLabel ?? 'No', points: yes.map((v) => 1 - v), end: row.no, color: SERIES_COLORS[1] },
+    { label: t.side(event.yesLabel ?? 'Yes'), points: yes, end: row.yes, color: SERIES_COLORS[0] },
+    { label: t.side(event.noLabel ?? 'No'), points: yes.map((v) => 1 - v), end: row.no, color: SERIES_COLORS[1] },
   ];
 }
 
@@ -67,14 +53,16 @@ function toPolyline(points: number[]): string {
 }
 
 export function PriceChart({ event }: { event: MarketEvent }) {
+  const t = useT();
   const [range, setRange] = useState<Range>('ALL');
+  const ranges = RANGE_IDS.map((value) => ({ value, label: value === 'ALL' ? t.chart.all : value }));
   const live = event.source === 'live';
   const series =
     event.kind === 'multi'
       ? event.rows.map((row) => ({ id: row.yesAsset, label: row.label, value: row.yes }))
       : [
-          { id: event.rows[0]?.yesAsset, label: event.yesLabel ?? 'Yes', value: event.rows[0]?.yes ?? null },
-          { id: event.rows[0]?.noAsset, label: event.noLabel ?? 'No', value: event.rows[0]?.no ?? null },
+          { id: event.rows[0]?.yesAsset, label: t.side(event.yesLabel ?? 'Yes'), value: event.rows[0]?.yes ?? null },
+          { id: event.rows[0]?.noAsset, label: t.side(event.noLabel ?? 'No'), value: event.rows[0]?.no ?? null },
         ];
   const ids = series.flatMap((item) => (item.id ? [item.id] : []));
   const history = useLive<{ histories: Record<string, History> }>(
@@ -100,10 +88,10 @@ export function PriceChart({ event }: { event: MarketEvent }) {
           times: points.map((point) => Date.parse(point.minute_at)),
         };
       })
-    : chartLines(event);
+    : chartLines(event, t);
   const n = RANGE_POINTS[range];
   const stamp = (ms: number) =>
-    new Date(ms).toLocaleString('en-US', {
+    new Date(ms).toLocaleString(t.locale, {
       timeZone: 'UTC',
       month: 'short',
       day: 'numeric',
@@ -115,13 +103,13 @@ export function PriceChart({ event }: { event: MarketEvent }) {
       ? [stamp(startAt), '', '', `${stamp(endAt)} UTC`]
       : ['—', '', '', '—']
     : range === 'ALL'
-      ? [event.open, '', '', 'Now']
-      : X_LABELS[range];
+      ? [t.date(event.open), '', '', t.chart.now]
+      : [...t.chart.axis[range], t.chart.now];
 
   return (
     <div className={styles.chart}>
       <div className={styles.toolbar}>
-        <SegmentedControl label="Chart range" options={RANGES} value={range} onChange={setRange} size="sm" />
+        <SegmentedControl label={t.chart.range} options={ranges} value={range} onChange={setRange} size="sm" />
         <div className={styles.legend}>
           {lines.map((line, index) => (
             <span key={`${index}:${line.label}`} className={styles.legendItem}>
@@ -133,15 +121,14 @@ export function PriceChart({ event }: { event: MarketEvent }) {
         </div>
       </div>
       <div className={styles.body}>
-        <div role="img" aria-label={`Price history for ${event.title}`} className={styles.plot}>
+        <div role="img" aria-label={t.chart.priceHistory(event.title)} className={styles.plot}>
           {GRID_LINES.map((top) => (
             <span key={top} className={styles.gridLine} style={{ top }} />
           ))}
           <span className={`${styles.gridLine} ${styles.baseline}`} />
           {live && !lines.some((line) => line.points.length) && (
             <span className={styles.empty}>
-              {history.error ??
-                (history.data || !ids.length ? 'No historical data for this range' : 'Loading history…')}
+              {history.error ?? (history.data || !ids.length ? t.chart.noHistory : t.chart.loadingHistory)}
             </span>
           )}
           {lines.map((line, index) => (
@@ -192,7 +179,7 @@ export function PriceChart({ event }: { event: MarketEvent }) {
       </div>
       {live && endAt > 0 && (
         <span className={styles.note}>
-          History snapshot · {stamp(availableStart)} – {stamp(endAt)} UTC · gaps are left empty.
+          {t.chart.historyNote(stamp(availableStart), stamp(endAt))}
         </span>
       )}
     </div>

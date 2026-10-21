@@ -1,6 +1,6 @@
 import type { MarketEvent } from '../../data/catalog';
 import { useEffect, type ReactNode } from 'react';
-import { plural } from '../../lib/format';
+import { useT } from '../../i18n';
 import { EventCard } from './EventCard';
 import styles from './EventList.module.css';
 
@@ -25,14 +25,15 @@ export function EventList({
   onSelect,
   footer,
 }: EventListProps) {
+  const t = useT();
   useEffect(() => {
     if (selectedId) document.getElementById(`event-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
   return (
-    <section aria-label="Events" className={styles.list}>
+    <section aria-label={t.markets.events} className={styles.list}>
       <div className={styles.header}>
         <h2 className={styles.title}>{title}</h2>
-        <span className={styles.count}>{plural(events.length, 'event', 'events')}</span>
+        <span className={styles.count}>{t.markets.eventCount(events.length)}</span>
       </div>
       {events.length === 0 && <p className={styles.empty}>{emptyText}</p>}
       {events.map((event) => (

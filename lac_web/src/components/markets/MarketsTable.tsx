@@ -1,6 +1,7 @@
 import type { MarketEvent, Outcome } from '../../data/catalog';
 import { marketAnchorId, type PricedSignal } from '../../lib/markets';
 import { cx } from '../../lib/cx';
+import { useT } from '../../i18n';
 import { cents, chance, money } from '../../lib/format';
 import styles from './MarketsTable.module.css';
 
@@ -12,6 +13,7 @@ interface MarketsTableProps {
 
 /** Prediction page: each outcome with its chance and Yes/No buy buttons. */
 export function MarketsTable({ event, outcomes, highlight }: MarketsTableProps) {
+  const t = useT();
   const multi = event.kind === 'multi';
   const yesLabel = multi ? 'Yes' : (event.yesLabel ?? 'Yes');
   const noLabel = multi ? 'No' : (event.noLabel ?? 'No');
@@ -26,11 +28,13 @@ export function MarketsTable({ event, outcomes, highlight }: MarketsTableProps) 
         >
           <div className={styles.label}>
             <span className={styles.name}>{o.label}</span>
-            <span className={styles.vol}>Vol {money(o.vol)}</span>
+            <span className={styles.vol}>
+              {t.markets.vol} {money(o.vol)}
+            </span>
           </div>
           <div className={styles.chance}>
             <span className={styles.chanceValue}>{chance(o.yes)}</span>
-            <span className={styles.chanceSub}>{multi ? 'chance' : `${yesLabel} chance`}</span>
+            <span className={styles.chanceSub}>{multi ? t.markets.chance : t.markets.sideChance(t.side(yesLabel))}</span>
           </div>
           <div className={styles.actions}>
             <button
@@ -40,7 +44,7 @@ export function MarketsTable({ event, outcomes, highlight }: MarketsTableProps) 
                 highlight?.outcomeId === o.id && highlight.side === 'yes' && styles.highlightSide,
               )}
             >
-              {o.yesLabel ?? yesLabel} {cents(event.source === 'live' ? (o.yesAsk ?? null) : o.yes)}
+              {t.side(o.yesLabel ?? yesLabel)} {cents(event.source === 'live' ? (o.yesAsk ?? null) : o.yes)}
             </button>
             <button
               type="button"
@@ -49,7 +53,7 @@ export function MarketsTable({ event, outcomes, highlight }: MarketsTableProps) 
                 highlight?.outcomeId === o.id && highlight.side === 'no' && styles.highlightSide,
               )}
             >
-              {o.noLabel ?? noLabel} {cents(event.source === 'live' ? (o.noAsk ?? null) : o.no)}
+              {t.side(o.noLabel ?? noLabel)} {cents(event.source === 'live' ? (o.noAsk ?? null) : o.no)}
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 # LAC · Prediction terminal
 
-LAC 的本機預測市場 Demo：以同一套畫面展示範例資料與 Polymarket 真實行情，包含市場瀏覽、歷史走勢、訊號定位，以及推薦分成與設定頁。
+LAC 的本機預測市場 Demo：以同一套畫面展示範例資料與 Polymarket 真實行情，包含市場瀏覽、歷史走勢、訊號定位、推薦分成與提領、設定頁，以及員工後台；介面可切換英文與繁體中文。
 
 這個 repository 同時包含 **React 前端 `lac_web`** 與 **Python 資料程式 `lac_data`**。Live 模式讀取本機 PostgreSQL；帳號、付款、錢包連線與下單尚未接入正式服務。
 
@@ -8,13 +8,14 @@ LAC 的本機預測市場 Demo：以同一套畫面展示範例資料與 Polymar
 
 ## Demo 與 Live
 
-| 功能                       | Demo                                         | Live                                           |
-| -------------------------- | -------------------------------------------- | ---------------------------------------------- |
-| Prediction                 | 內建議題、價格與模擬走勢                     | 從 PostgreSQL 讀取 Polymarket 議題、報價與歷史 |
-| Signal                     | 範例訊號；點選後定位市場並標黃對應的 Yes／No | 顯示 `No LAC signals in Live demo`             |
-| Referral rewards           | 可調整代理比例，立即重算收入與分成           | 同一套 Demo 互動                               |
-| Settings                   | 推薦碼、錢包連線狀態與 API 欄位展示          | 同一套 Demo 互動                               |
-| Products／Buy USDT／Stocks | 方案與介面展示；Stocks 為佔位頁              | 同一套 Demo 內容                               |
+| 功能                       | Demo                                           | Live                                           |
+| -------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| Prediction                 | 內建議題、價格與模擬走勢                       | 從 PostgreSQL 讀取 Polymarket 議題、報價與歷史 |
+| Signal                     | 範例訊號；點選後定位市場並標黃對應的 Yes／No   | 顯示 `No LAC signals in Live demo`             |
+| Referral rewards           | 可調整代理比例、申請提領，立即重算收入與餘額   | 同一套 Demo 互動                               |
+| Settings                   | 推薦碼、連接錢包與啟用交易（展示）、語言       | 同一套 Demo 互動                               |
+| Products／Buy USDT／Stocks | 方案與介面展示；Stocks 為佔位頁                | 同一套 Demo 內容                               |
+| 後台（`/admin`）           | 待辦、會員權益、產品版本、出金審核、財務、系統 | 同一套 Demo 資料，與網站連動                   |
 
 Demo 與 Live 共用 Sidebar、EventCard、EventDetail、PriceChart、MarketsTable。Live 沒有比分或報價資料時，不以 Demo 值補上。
 
@@ -223,8 +224,8 @@ uv run ruff format --check .
 ## Demo 範圍與常見問題
 
 - **沒有真實交易：** Sign in、Subscribe、Redeem、Telegram 綁定與 Yes／No 下單按鈕尚未接入服務；Live 不計算 LAC fair／EV 或產生真實訊號。
-- **推薦分成為範例：** 官方比例 20%、自己的比例 80%；可將直接下層代理設定為 0–80 整數。推薦碼與代理比例在目前頁面記憶體中，重新整理會重設。
-- **錢包與 API 欄位為展示：** Connect wallet 只切換 Demo 狀態；Save API key 清空輸入，不儲存或傳送憑證。語言／主題選項僅切換狀態，尚無完整翻譯或深色配色。
+- **推薦分成為範例：** 官方比例 20%、自己的比例 80%；可將直接下層代理設定為 0–80 整數。推薦碼、代理比例、提領申請與後台操作都在目前頁面記憶體中，重新整理會重設；只有語言選擇會記在瀏覽器。
+- **錢包與交易為展示：** Connect wallet 與 Enable trading 只切換 Demo 狀態，不簽名、不儲存任何憑證。正式版由錢包簽一次名產生 Polymarket API key，私鑰不離開錢包。主題選項僅切換狀態，尚無深色配色。
 - **Live 在 preview 無法載入：** Live middleware 僅由 `npm run dev` 提供；`npm run preview` 或單獨開啟 `dist/` 不提供 DB 查詢。
 - **網站無法啟動或 Live 連線失敗：** 先檢查根目錄 `.env` 的五個欄位、PostgreSQL 16／5432、兩個 setup 結果；Vite 固定使用 5173，埠已被占用時會直接報錯。
 - **API 連線失敗：** 確認 WireGuard 已開啟，並查看爬蟲終端的 `provider_error`。HTTP 401／403 會暫停該單位，原因處理好後再重新啟動。

@@ -185,3 +185,73 @@
   margin-top: 6px;
   font-weight: 600;
 }
+
+.balance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 32px;
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2xl);
+  background: var(--color-surface);
+}
+
+.balanceMain {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.balanceValue {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.balanceItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.balanceSmall {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.withdraw {
+  min-width: 140px;
+}
+
+.withdrawals {
+  min-width: 760px;
+  table-layout: auto;
+}
+
+.withdrawals th:first-child,
+.withdrawals td:first-child {
+  width: auto;
+}
+
+.sub {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.details {
+  max-width: 280px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.empty {
+  color: var(--color-text-muted);
+  text-align: center;
+}

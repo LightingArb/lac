@@ -7,15 +7,14 @@ export type CategoryId = 'trending' | EventCategoryId;
 export type ProductId = 'weather' | 'crypto' | 'forex' | 'future' | 'sport';
 export type Side = 'yes' | 'no';
 
+/** Names come from the dictionaries (t.categories, t.products). */
 export interface Category {
   id: CategoryId;
-  label: string;
   icon: IconName;
 }
 
 export interface Product {
   id: ProductId;
-  label: string;
   icon: IconName;
 }
 
@@ -80,7 +79,8 @@ export interface MarketEvent {
 export interface Signal {
   id: string;
   product: ProductId;
-  productLine: string;
+  /** Shown after the product name, e.g. "London" in "Weather · London". */
+  market: string;
   title: string;
   sideLabel: string;
   side: Side;
@@ -94,22 +94,22 @@ export interface Signal {
 }
 
 export const CATEGORIES: Category[] = [
-  { id: 'trending', label: 'Trending', icon: 'trending' },
-  { id: 'politics', label: 'Politics', icon: 'politics' },
-  { id: 'sports', label: 'Sports', icon: 'sports' },
-  { id: 'finance', label: 'Finance', icon: 'finance' },
-  { id: 'crypto', label: 'Crypto', icon: 'crypto' },
-  { id: 'esports', label: 'Esports', icon: 'esports' },
-  { id: 'geopolitics', label: 'Geopolitics', icon: 'globe' },
-  { id: 'weather', label: 'Weather', icon: 'weather' },
+  { id: 'trending', icon: 'trending' },
+  { id: 'politics', icon: 'politics' },
+  { id: 'sports', icon: 'sports' },
+  { id: 'finance', icon: 'finance' },
+  { id: 'crypto', icon: 'crypto' },
+  { id: 'esports', icon: 'esports' },
+  { id: 'geopolitics', icon: 'globe' },
+  { id: 'weather', icon: 'weather' },
 ];
 
 export const PRODUCTS: Product[] = [
-  { id: 'weather', label: 'Weather', icon: 'weather' },
-  { id: 'crypto', label: 'Crypto', icon: 'crypto' },
-  { id: 'forex', label: 'Forex', icon: 'forex' },
-  { id: 'future', label: 'Future', icon: 'future' },
-  { id: 'sport', label: 'Sport', icon: 'sports' },
+  { id: 'weather', icon: 'weather' },
+  { id: 'crypto', icon: 'crypto' },
+  { id: 'forex', icon: 'forex' },
+  { id: 'future', icon: 'future' },
+  { id: 'sport', icon: 'sports' },
 ];
 
 export const PRODUCT_ICONS: Record<ProductId, IconName> = {
@@ -409,7 +409,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's1',
     product: 'weather',
-    productLine: 'Weather · London',
+    market: 'London',
     title: 'Daily high · London 17°C',
     sideLabel: 'YES',
     side: 'yes',
@@ -423,7 +423,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's2',
     product: 'weather',
-    productLine: 'Weather · London',
+    market: 'London',
     title: 'Daily high · London 19°C or higher',
     sideLabel: 'NO',
     side: 'no',
@@ -437,7 +437,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's3',
     product: 'weather',
-    productLine: 'Weather · New York',
+    market: 'New York',
     title: 'Daily high · New York 66–67°F',
     sideLabel: 'YES',
     side: 'yes',
@@ -451,7 +451,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's4',
     product: 'weather',
-    productLine: 'Weather · New York',
+    market: 'New York',
     title: 'Daily high · New York 70–71°F',
     sideLabel: 'NO',
     side: 'no',
@@ -465,7 +465,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's5',
     product: 'crypto',
-    productLine: 'Crypto · BTC',
+    market: 'BTC',
     title: 'BTC · 5m Up/Down',
     sideLabel: 'UP',
     side: 'yes',
@@ -479,7 +479,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's6',
     product: 'crypto',
-    productLine: 'Crypto · ETH',
+    market: 'ETH',
     title: 'ETH · 15m Up/Down',
     sideLabel: 'DOWN',
     side: 'no',
@@ -493,7 +493,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's7',
     product: 'future',
-    productLine: 'Future · Gold',
+    market: 'Gold',
     title: 'Gold (GC) · D1 Up/Down',
     sideLabel: 'DOWN',
     side: 'no',
@@ -507,7 +507,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's8',
     product: 'sport',
-    productLine: 'Sport · Soccer',
+    market: 'Soccer',
     title: 'Arsenal vs. Chelsea · Arsenal',
     sideLabel: 'YES',
     side: 'yes',
@@ -521,7 +521,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's9',
     product: 'sport',
-    productLine: 'Sport · Soccer',
+    market: 'Soccer',
     title: 'Arsenal vs. Chelsea · Chelsea',
     sideLabel: 'NO',
     side: 'no',
@@ -535,7 +535,7 @@ export const SIGNALS: Signal[] = [
   {
     id: 's10',
     product: 'sport',
-    productLine: 'Sport · Basketball',
+    market: 'Basketball',
     title: 'Lakers vs. Celtics · Celtics',
     sideLabel: 'CELTICS',
     side: 'no',

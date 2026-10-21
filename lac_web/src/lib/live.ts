@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CATEGORIES, type EventCategoryId, type MarketEvent, type Outcome } from '../data/catalog';
+import { useT } from '../i18n';
 import type { Workspace } from './markets';
 
 export type DataMode = 'demo' | 'live';
@@ -57,6 +58,7 @@ export interface History {
   points: { minute_at: string; source_at: string; price: string; resolution_seconds: number }[];
 }
 export function useLive<T>(url: string | null, refresh = 0) {
+  const t = useT();
   const [value, setValue] = useState<{ url: string; data: T | null; error: string | null }>({
     url: '',
     data: null,
@@ -64,6 +66,11 @@ export function useLive<T>(url: string | null, refresh = 0) {
   });
   useEffect(() => {
     if (!url) return;
+    if (import.meta.env.MODE === 'static') {
+      // The single-file build has no server behind it, so there is no live database to read.
+      setValue({ url, data: null, error: t.app.liveNeedsServer });
+      return;
+    }
     const controller = new AbortController();
     let running = false;
     const read = async () => {
@@ -72,11 +79,11 @@ export function useLive<T>(url: string | null, refresh = 0) {
       try {
         const response = await fetch(url, { signal: controller.signal });
         const body = await response.json();
-        if (!response.ok) throw new Error(body.error ?? 'Live request failed');
+        if (!response.ok) throw new Error(body.error ?? t.app.liveFailed);
         if (!controller.signal.aborted) setValue({ url, data: body, error: null });
       } catch (error) {
         if (!controller.signal.aborted)
-          setValue({ url, data: null, error: error instanceof Error ? error.message : 'Live request failed' });
+          setValue({ url, data: null, error: error instanceof Error ? error.message : t.app.liveFailed });
       } finally {
         running = false;
       }
@@ -91,18 +98,19 @@ export function useLive<T>(url: string | null, refresh = 0) {
       controller.abort();
       if (timer !== null) window.clearInterval(timer);
     };
-  }, [url, refresh]);
+  }, [url, refresh, t]);
   return value.url === url ? { data: value.data, error: value.error } : { data: null, error: null };
 }
 const number = (value: string | null | undefined) => (value == null ? null : Number(value));
-const date = (value: string | null, options: Intl.DateTimeFormatOptions) =>
-  value ? new Date(value).toLocaleString('en-US', { ...options, timeZone: 'UTC' }) : '—';
+const date = (value: string | null, options: Intl.DateTimeFormatOptions, locale: string) =>
+  value ? new Date(value).toLocaleString(locale, { ...options, timeZone: 'UTC' }) : '—';
 
 /** Published fields mapped into the same presentation model as Demo. */
 export function liveEvent(
   event: LiveEvent,
   outcomes = event.preview ?? [],
   marketCount = event.market_count,
+  locale = 'en-US',
 ): MarketEvent {
   const grouped = new Map<string, LiveOutcome[]>();
   for (const item of outcomes) {
@@ -141,11 +149,11 @@ export function liveEvent(
     tags: event.tags.map((tag) => tag.label),
     marketCount,
     observedAt: event.observed_at,
-    open: date(event.start_at, { month: 'short', day: 'numeric' }),
-    start: date(event.start_at, { dateStyle: 'medium', timeStyle: 'short' }) + (event.start_at ? ' UTC' : ''),
-    end: date(event.end_at, { dateStyle: 'medium', timeStyle: 'short' }) + (event.end_at ? ' UTC' : ''),
-    endDate: date(event.end_at, { month: 'short', day: 'numeric' }),
-    endTime: date(event.end_at, { hour: 'numeric', minute: '2-digit' }),
+    open: date(event.start_at, { month: 'short', day: 'numeric' }, locale),
+    start: date(event.start_at, { dateStyle: 'medium', timeStyle: 'short' }, locale) + (event.start_at ? ' UTC' : ''),
+    end: date(event.end_at, { dateStyle: 'medium', timeStyle: 'short' }, locale) + (event.end_at ? ' UTC' : ''),
+    endDate: date(event.end_at, { month: 'short', day: 'numeric' }, locale),
+    endTime: date(event.end_at, { hour: 'numeric', minute: '2-digit' }, locale),
     vol24: number(event.volume_24h),
     volTotal: number(event.volume_total),
     kind: marketCount === 1 ? 'binary' : 'multi',
@@ -170,6 +178,7 @@ interface PageState {
 }
 
 export function useLiveWorkspace(enabled: boolean, category: string, search: string) {
+  const t = useT();
   const scope = `${enabled}:${category}:${search}`;
   const initial: PageState = { scope, cursors: [null], selected: null, marketCursors: [''] };
   const [stored, setStored] = useState<PageState>(initial);
@@ -196,13 +205,16 @@ export function useLiveWorkspace(enabled: boolean, category: string, search: str
         categories:
           categories.data?.categories.map((item) => ({
             ...item,
+            label: t.categories[item.id as keyof typeof t.categories] ?? item.label,
             icon: CATEGORIES.find((c) => c.id === item.id)!.icon,
             active: item.id === category,
           })) ?? [],
-        categoryLabel: CATEGORIES.find((item) => item.id === category)?.label ?? '',
-        events: list.data?.events.map((event) => liveEvent(event)) ?? [],
-        selected: detail.data ? liveEvent(detail.data.event, detail.data.outcomes, detail.data.marketCount) : null,
-        emptyText: list.error ?? (list.data ? 'No events match this search.' : 'Loading live markets…'),
+        categoryLabel: t.categories[category as keyof typeof t.categories] ?? '',
+        events: list.data?.events.map((event) => liveEvent(event, undefined, undefined, t.locale)) ?? [],
+        selected: detail.data
+          ? liveEvent(detail.data.event, detail.data.outcomes, detail.data.marketCount, t.locale)
+          : null,
+        emptyText: list.error ?? (list.data ? t.markets.noMatch : t.markets.loadingLive),
         signals: [],
         visibleProducts: [],
         signalCountByEvent: {},

@@ -40,3 +40,13 @@
   border-color: var(--color-border);
   background: var(--color-surface-muted);
 }
+
+.invalid,
+.invalid:focus {
+  border-color: var(--color-danger);
+}
+
+.error {
+  color: var(--color-danger);
+  font-size: 13px;
+}

@@ -39,6 +39,8 @@
   --color-danger-dot: #dc2626;
   --color-danger-soft: #fef2f2;
   --color-danger-border: #fecaca;
+  --color-warning: #b45309;
+  --color-warning-soft: #fffbeb;
 
   /* LAC signal highlight */
   --color-highlight-bg: #fef9c3;
