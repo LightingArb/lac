@@ -6,35 +6,37 @@ LAC 是一個預測市場網站：客戶可以瀏覽 Polymarket 的全部市場�
 
 這個 repository 有兩個部分：
 
-| 目錄                   | 是什麼                                                                                                                                                   | 誰負責          |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| [lac_data/](lac_data/) | Polymarket 全市場資料程式：抓議題、市場、報價與歷史價格，寫進 PostgreSQL；規劃中的 `m_signal` 收集各產品訊號、`m_api` 提供對外 HTTP 介面，兩者都還沒實作 | B 組（Remy）    |
-| [lac_web/](lac_web/)   | 網站範例（Demo）：前台全部畫面、員工後台、Demo／Live 兩種資料；A 組照著做，可以沿用或重寫                                                                | 範例由 B 組提供 |
+| 目錄                                                   | 是什麼                                                                                                                                                                                                                | 誰負責          |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| [python/](python/)                                     | 現有 `m_live`、`m_historical` 抓 Polymarket 議題、市場、報價與歷史價格，寫進 PostgreSQL；規劃中的 `m_product` 收各產品訊號、體育全球賠率、股票分析（後兩種格式未定），`m_api` 提供唯讀對外 HTTP；後兩個模組都還沒實作 | B 組（Remy）    |
+| [typescript/web_page_demo/](typescript/web_page_demo/) | 頁面原型（Demo）：前台全部畫面、員工後台、Demo／Live 兩種資料；A 組照著做，可以沿用或重寫                                                                                                                             | 範例由 B 組提供 |
 
 [分工與狀態](#1分工與狀態) · [從零開始跑起來](#2從零開始跑起來) · [專案結構](#3專案結構) · [資料表](#4資料表) · [畫面](#5畫面) · [對外 HTTP 介面](#6對外-http-介面m_api) · [商業規則](#7商業規則) · [後台](#8後台) · [開發與檢查](#9開發與檢查) · [常見問題](#10常見問題) · [待確認](#11待確認) · [附錄](#附錄之後才做)
 
 ## 1｜分工與狀態
 
-- **A 組（合作夥伴）：** 網站與 app 本身，以及會員系統：註冊登入、付費方案、權益與到期、推薦分潤與提領、後台。購買 USDT 的合作網站與金流也由 A 組提供。
-- **B 組（Remy）：** 背後的引擎：Polymarket 市場資料（本 repo 的 `lac_data`）、LAC 訊號（透過 `m_api` 提供，介面還沒實作）、下單引擎（送出交易、確認成交、計算回佣）；客服也由 B 組負責，一律走 Telegram。
-- **資料交界：** A 組只透過 `m_api`（§6）取得 Polymarket 資料與 LAC 訊號，不直接連資料庫。
-- **下單交界：** A 組的下單畫面呼叫 B 組的下單引擎（§7.5）。
+- **A 組（合作夥伴）：** 網站與 app 本身，以及會員系統：註冊登入、付費方案、權益與到期、推薦分潤與提領、後台。購買 USDT 的合作網站與金流也由 A 組提供；下單、平倉與 TP／SL 由 A 組在自己的伺服器上執行。
+- **B 組（Remy）：** Polymarket 市場資料（本 repo 的 `python/`）、各產品的訊號、體育全球賠率與股票分析；由規劃中的 `m_product` 收集產品資料，再透過唯讀 `m_api` 提供，兩個模組都還沒實作。B 組不做下單引擎；客服由 B 組負責，一律走 Telegram。
+- **資料交界：** A 組只透過 `m_api`（§6）取得 Polymarket 與產品資料，不直接連資料庫；體育全球賠率與股票分析的格式還沒定。
+- **下單交界：** A 組在自己的伺服器上執行下單、平倉與 TP／SL，每張單帶 LAC 的 builder code（§7.5）。
 
-| 功能              | A 組                               | B 組                                                  | 狀態       |
-| ----------------- | ---------------------------------- | ----------------------------------------------------- | ---------- |
-| 1. 看市場         | 照 Demo 做畫面，正式資料接 `m_api` | 資料程式已經在跑；`m_api` 還沒實作，格式草稿見 §6     | 可以開工   |
-| 2. 訊號           | 照 Demo 做畫面，先用假資料         | 訊號系統、`m_signal` 與 `m_api` 還沒好，格式草稿見 §6 | 先做畫面   |
-| 3. 下單           | 頁面上已有按鈕，先看懂             | 下單引擎；還在等 Polymarket builder 金鑰              | 先看懂就好 |
-| 4. 會員與付費方案 | **合作夥伴的主要工作**             | 提供產品內容與上架規則（§7.1）                        | 可以開工   |
-| 5. 推薦分潤與提領 | 做在會員系統裡                     | 提供分潤規則（§7.3）                                  | 可以開工   |
-| 6. 購買 USDT      | 提供合作網站與金流                 | 只提供畫面範例                                        | 可以開工   |
-| 7. 後台           | 參考 Demo，怎麼改、加或刪都可以    | 只提供範例                                            | 可以開工   |
+| 功能              | A 組                                                                | B 組                                                   | 狀態               |
+| ----------------- | ------------------------------------------------------------------- | ------------------------------------------------------ | ------------------ |
+| 1. 看市場         | 照 Demo 做畫面，正式資料接 `m_api`                                  | 資料程式已經在跑；`m_api` 還沒實作，格式草稿見 §6      | 可以開工           |
+| 2. 訊號           | 照 Demo 做畫面，先用假資料                                          | 訊號系統、`m_product` 與 `m_api` 還沒好，格式草稿見 §6 | 先做畫面           |
+| 3. 下單           | 在自己的伺服器執行下單、平倉與 TP／SL，每張單帶 LAC 的 builder code | 提供 LAC 的 builder code 與相關憑證，不做下單引擎      | 憑證交付方式待確認 |
+| 4. 會員與付費方案 | **合作夥伴的主要工作**                                              | 提供產品內容與上架規則（§7.1）                         | 可以開工           |
+| 5. 推薦分潤與提領 | 做在會員系統裡                                                      | 提供分潤規則（§7.3）                                   | 可以開工           |
+| 6. 購買 USDT      | 提供合作網站與金流                                                  | 只提供畫面範例                                         | 可以開工           |
+| 7. 後台           | 參考 Demo，怎麼改、加或刪都可以                                     | 只提供範例                                             | 可以開工           |
 
 股票、全球體育賠率分析之後才做，見[附錄](#附錄之後才做)。
 
 ## 2｜從零開始跑起來
 
 目標：clone 下來之後，先讓資料程式抓 Polymarket 資料進資料庫，再打開網站，在 Live 模式看到真實行情。只想看畫面的話，跳到第 6 步，Demo 模式不需要資料庫有資料。
+
+第 4～6 步含 `cd` 的指令區塊都從 repository 根目錄開始執行；不同終端機各自切到根目錄。
 
 ### 需要的環境
 
@@ -90,10 +92,10 @@ macOS（Homebrew）：`brew install postgresql@16 && brew services start postgre
 ### 4. 安裝套件、建立資料表
 
 ```bash
-cd lac_data/python
+cd python
 uv sync --locked
-uv run --env-file ../../.env python -m m_live.all_setup
-uv run --env-file ../../.env python -m m_historical.all_setup
+uv run --env-file ../.env python -m m_live.all_setup
+uv run --env-file ../.env python -m m_historical.all_setup
 ```
 
 看到這兩行就成功：
@@ -108,8 +110,8 @@ setup 可以重跑：缺的表會補上，已經存在的表會檢查欄位，�
 ### 5. 啟動資料程式（終端機一）
 
 ```bash
-cd lac_data/python
-uv run --env-file ../../.env python -m m_live.all_runtime
+cd python
+uv run --env-file ../.env python -m m_live.all_runtime
 ```
 
 - 會開兩個進程：`gamma`（議題、市場、結果）與 `clob`（最新報價），各自每 600 秒跑一輪；一輪跑超過 600 秒，就在跑完後立刻開始下一輪。
@@ -121,21 +123,21 @@ uv run --env-file ../../.env python -m m_live.all_runtime
 **選用：歷史價格（走勢圖用）。** 歷史是手動跑的單次工作，不會跟著上面的程式自動更新。預設抓 24 小時成交量前 500 個進行中議題的全部結果，固定抓最近 3 天：
 
 ```bash
-cd lac_data/python
-uv run --env-file ../../.env python -m m_historical.all_runtime --once --days 3 --top-events 500
+cd python
+uv run --env-file ../.env python -m m_historical.all_runtime --once --days 3 --top-events 500
 ```
 
 中途中斷想續跑，要用同一個結束時間，已完成的會跳過：
 
 ```bash
 LAC_HISTORY_END=$(date -u +%Y-%m-%dT%H:%M:00Z)
-uv run --env-file ../../.env python -m m_historical.all_runtime --once --days 3 --top-events 500 --end "$LAC_HISTORY_END"
+uv run --env-file ../.env python -m m_historical.all_runtime --once --days 3 --top-events 500 --end "$LAC_HISTORY_END"
 ```
 
 ### 6. 啟動網站（終端機二）
 
 ```bash
-cd lac_web
+cd typescript/web_page_demo
 npm ci
 npm run dev
 ```
@@ -145,7 +147,7 @@ npm run dev
 - **Demo**：內建的範例資料，不需要資料庫有資料，也不需要資料程式在跑。
 - **Live**：從資料庫讀真實行情（只讀）。畫面每 30 秒重新讀表；資料本身由資料程式每 600 秒更新。
 
-其他指令：`npm run build:static` 會產生單一檔案 `lac_web/dist-static/index.html`，不用伺服器就能打開，適合傳給別人看（只有 Demo）。
+其他指令：`npm run build:static` 會產生單一檔案 `typescript/web_page_demo/dist-static/index.html`，不用伺服器就能打開，適合傳給別人看（只有 Demo）。
 
 ### 7. 確認有資料
 
@@ -169,8 +171,9 @@ flowchart LR
     P --> V
     V --> L["Live 畫面"]
     D["內建範例資料"] --> R["Demo 畫面"]
-    E["各產品 m_ev 的 Public Table"] --> S["m_signal：收集訊號（還沒實作）"]
-    S --> T["m_signal 訊號表（還沒實作）"]
+    E["各產品 m_ev 的 Public Table"] --> S["m_product：收集產品資料（還沒實作）"]
+    X["體育全球賠率、股票分析（格式未定）"] --> S
+    S --> T["m_product 資料表（還沒實作）"]
     M --> A["m_api：對外 HTTP（還沒實作）"]
     Q --> A
     P --> A
@@ -183,7 +186,8 @@ flowchart LR
 ├── README.md                  # 本文件
 ├── AGENTS.md                  # AI 協作入口
 ├── .env                       # 資料程式與網站共用的設定
-├── lac_data/python/
+├── .gitignore                 # 忽略依賴、快取與建置輸出
+├── python/
 │   ├── h_shared/              # 共用：資料庫連線、排程、HTTP 重試與限流
 │   ├── m_live/                # 議題、市場、結果（gamma）與最新報價（clob）
 │   │   ├── all_setup.py       # 建表
@@ -191,11 +195,12 @@ flowchart LR
 │   │   ├── sql/               # 資料表定義
 │   │   └── src/               # m01_gamma、m02_clob
 │   └── m_historical/          # 歷史分鐘價格（手動單次）
-└── lac_web/
-    ├── server/live.ts         # 網站伺服器的唯讀資料庫查詢（/api/live/*）
-    ├── src/                   # 前台、後台、共用元件、範例資料、中英文文案
-    ├── tests/                 # 資料對應與商業規則測試
-    └── README.md              # 前端開發導覽
+└── typescript/
+    └── web_page_demo/
+        ├── server/live.ts     # 網站伺服器的唯讀資料庫查詢（/api/live/*）
+        ├── src/               # 前台、後台、共用元件、範例資料、中英文文案
+        ├── tests/             # 資料對應與商業規則測試
+        └── README.md          # 前端開發導覽
 ```
 
 命名規則：`m_<模組>/` 是一個模組，裡面的 `mNN_<名稱>` 是步驟；`h_shared/` 是不含業務規則的共用工具；每個模組都有 `all_setup.py`（建表）與 `all_runtime.py`（執行）。
@@ -215,7 +220,7 @@ flowchart LR
 - **進行中：** 議題與市場都要 `in_current_scan AND active AND NOT closed AND NOT archived`。同一個議題底下可能有已關閉的市場，要逐一判斷。
 - **歷史：** 只有來源真的有資料的分鐘才有一筆，可能有缺口；畫面上斷線就好，不要補點。
 
-完整定義在 [m_live/sql](lac_data/python/m_live/sql/) 與 [m_historical/sql](lac_data/python/m_historical/sql/)；網站的實際查詢在 [server/live.ts](lac_web/server/live.ts)。
+完整定義在 [m_live/sql](python/m_live/sql/) 與 [m_historical/sql](python/m_historical/sql/)；網站的實際查詢在 [server/live.ts](typescript/web_page_demo/server/live.ts)。
 
 **`m_live.m01_gamma_event`**：一列＝一個議題；主鍵 `event_id`。
 
@@ -335,15 +340,15 @@ flowchart LR
 - 左左選分類 → 左中列出議題 → 點議題 → 右中顯示詳情。
 - 在 Signal 點右右的一張訊號 → 左中跳到那個議題，右中捲到那個選項，**對應的 Yes 或 No 按鈕變黃底黃框**，那一列淡黃底。訊號靠 Polymarket 編號對到市場（§6）。
 
-**語言：** 繁體中文與英文都要，左下角或 Settings 切換。Polymarket 的內容（議題標題、選項名稱、標籤）維持原文不翻；我們自己的東西（分類、產品、項目名稱）兩種語言都要有。範例的文案集中在 [lac_web/src/i18n/](lac_web/src/i18n/)。
+**語言：** 繁體中文與英文都要，左下角或 Settings 切換。Polymarket 的內容（議題標題、選項名稱、標籤）維持原文不翻；我們自己的東西（分類、產品、項目名稱）兩種語言都要有。範例的文案集中在 [typescript/web_page_demo/src/i18n/](typescript/web_page_demo/src/i18n/)。
 
 **尺寸：** 寬螢幕為主，範例已支援手機寬度：低於 768px 選單變抽屜，低於 1200px 訊號欄變抽屜。
 
 ## 6｜對外 HTTP 介面（m_api）
 
-**這是草稿：端點與位址還沒跟 A 組對齊，`m_api` 與收集訊號的 `m_signal` 都還沒實作。** A 組正式串接只走這個 HTTP 介面；§2 的 Live 啟動方式是範例網站的本機環境。
+**這是草稿：端點與位址還沒跟 A 組對齊，`m_api` 與收集產品資料的 `m_product` 都還沒實作。** A 組正式串接只走這個 HTTP 介面；§2 的 Live 啟動方式是範例網站的本機環境。
 
-`m_signal` 唯讀各產品 `m_ev` 的 Public Table，只收 `market_source = POLYMARKET` 的目前資料，寫進 Web 的訊號表；包含 EV 不為正與 `stale`、`blocked` 等狀態，不重算數值、不重建分類。`m_api` 只讀 Web 的 `m_live`、`m_historical`、`m_signal`，不直接連各產品的資料庫。
+`m_product` 唯讀各產品已發布的 Public Table，收集訊號、體育的全球賠率與股票的分析，寫進 Web 自己的表。訊號來自各產品 `m_ev`，只收 `market_source = POLYMARKET` 的目前資料；包含 EV 不為正與 `stale`、`blocked` 等狀態，不重算數值、不重建分類。體育全球賠率與股票分析的格式還沒定。`m_api` 只讀 Web 的 `m_live`、`m_historical`、`m_product`，不直接連各產品的資料庫，也不寫入或觸發運算。
 
 ### 共通規則
 
@@ -775,7 +780,7 @@ flowchart LR
 - **版本：** 產品發布後內容就固定。要加或拿掉項目，就發布下一版（v2、v3…），上一版自動從商店下架。價格跟著版本走。
 - **已經買的人：** 買到哪一版就一直是那一版，直到到期，什麼都不用動。舊客戶想要新項目，可以再買一次，或由員工在後台把他升級到新版、自己決定到期日。
 - **手動開通與兌換碼：** 都給「當下上架」的版本。
-- 範例的規則與測試：[lac_web/src/data/products.ts](lac_web/src/data/products.ts)、[backend.ts](lac_web/src/data/backend.ts)。
+- 範例的規則與測試：[typescript/web_page_demo/src/data/products.ts](typescript/web_page_demo/src/data/products.ts)、[backend.ts](typescript/web_page_demo/src/data/backend.ts)。
 
 ### 7.2 會員與付費方案
 
@@ -795,7 +800,7 @@ flowchart LR
 - **按比例縮減（只有官方可以）：** 把整條線的比例按同一個比例一起砍，砍下來的全部回到官方。例：上面的例子砍 50% → C 從 55% 變 27.5%、B 從 25% 變 12.5%、官方從 20% 變 60%。之後官方可以再決定多給某條線（回到一般調整，只能加）。
 - 比例取到小數點後 6 位。
 - 推薦碼在 Settings 隨時可改，不限次數；推薦連結跟著換。
-- 範例的分成計算：[lac_web/src/data/referral.ts](lac_web/src/data/referral.ts)、[admin.ts](lac_web/src/data/admin.ts)（代理樹）。
+- 範例的分成計算：[typescript/web_page_demo/src/data/referral.ts](typescript/web_page_demo/src/data/referral.ts)、[admin.ts](typescript/web_page_demo/src/data/admin.ts)（代理樹）。
 
 ### 7.4 提領
 
@@ -805,13 +810,13 @@ flowchart LR
 - **流程：** 會員申請時貼上自己的收款地址 → 員工在後台審核：核准或駁回（要寫原因，會員看得到）→ 員工轉帳 → 貼上交易 hash，會員那邊就看得到。駁回的金額回到可提領餘額。
 - 審核中與已核准的金額會凍結，不能重複提領。
 - 最低金額、手續費誰付、幾天內處理、收入何時進到可提領，都待確認。範例裡的 $50 最低金額只是暫定；範例程式還有 USDT · TRC20 選項，之後改程式時拿掉。
-- 範例的流程與餘額計算：[lac_web/src/data/withdrawals.ts](lac_web/src/data/withdrawals.ts)。
+- 範例的流程與餘額計算：[typescript/web_page_demo/src/data/withdrawals.ts](typescript/web_page_demo/src/data/withdrawals.ts)。
 
 ### 7.5 下單（Polymarket builder）
 
 - 客戶在 LAC 下單時，訂單的 `builder` 欄位帶 LAC 的 builder code，成交量與手續費記在 LAC 名下。builder code 是訂單內容的一部分，要在簽名前放進去。
 - 每筆訂單由客戶的錢包簽名，再用客戶的 Polymarket API 憑證送出。API 憑證（key、secret、passphrase 三件一組）是**錢包簽一次名**產生的，客戶不用自己去找、也不用貼；私鑰永遠不離開錢包。Settings 的流程是「連接錢包 → 啟用交易」。
-- **分工：** 頁面上的按鈕由 A 組做。按下去之後的下單引擎由 B 組做：送出交易、確認成交、從 builder 紀錄算回佣金。介面怎麼接待確認；B 組還在等 builder 金鑰，A 組先看懂就好。
+- **分工：** 頁面與交易執行由 A 組負責：在 A 組自己的伺服器上執行下單、平倉與 TP／SL，每張單帶 LAC 的 builder code。B 組不做下單引擎；LAC 的 builder code 與相關憑證怎麼交給 A 組待確認。
 - 參考：[Order attribution](https://docs.polymarket.com/trading/orders/attribution)、[Builder client](https://docs.polymarket.com/trading/clients/builder)、[Authentication](https://docs.polymarket.com/api-reference/authentication)。
 
 ### 7.6 購買 USDT
@@ -833,24 +838,26 @@ flowchart LR
 | 財務 | 報表、付款（含退款）、代理分潤樹                                                                                                  |
 | 系統 | 網站內容（購買 USDT 清單、公告、法律頁面）、員工帳號與角色權限、操作紀錄（不能改也不能刪）                                        |
 
-範例裡已經做好的連動（正式版也要有）：退款會撤銷權益；停權會擋住核准與出款；發布新版會讓舊版下架；每個員工動作都留紀錄。範例的「後端」是一個 reducer：[lac_web/src/data/backend.ts](lac_web/src/data/backend.ts)，測試在 [lac_web/tests/](lac_web/tests/)。
+範例裡已經做好的連動（正式版也要有）：退款會撤銷權益；停權會擋住核准與出款；發布新版會讓舊版下架；每個員工動作都留紀錄。範例的「後端」是一個 reducer：[typescript/web_page_demo/src/data/backend.ts](typescript/web_page_demo/src/data/backend.ts)，測試在 [typescript/web_page_demo/tests/](typescript/web_page_demo/tests/)。
 
 ## 9｜開發與檢查
 
 ```bash
-# 前端
-cd lac_web
+# 前端：從 repository 根目錄開始
+cd typescript/web_page_demo
 npm test          # 資料對應、分成、提領、產品版本與權益、中英文鍵值
 npm run build     # TypeScript 檢查與正式輸出 dist/
+```
 
-# 資料程式
-cd lac_data/python
+```bash
+# 資料程式：從 repository 根目錄開始
+cd python
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 ```
 
-前端的元件、路由與檔案導覽見 [lac_web/README.md](lac_web/README.md)。
+前端的元件、路由與檔案導覽見 [typescript/web_page_demo/README.md](typescript/web_page_demo/README.md)。
 
 ## 10｜常見問題
 
@@ -867,7 +874,7 @@ uv run ruff format --check .
 
 1. `m_api` 的正式位址與 token 怎麼交付、端點格式（§6 是草稿）。
 2. 「項目」取 `classification_path` 的哪一層。
-3. 下單：A 組畫面呼叫 B 組下單引擎的介面。
+3. LAC 的 builder code 與相關憑證怎麼交給 A 組。
 4. 各產品價格、付款方式。
 5. 提領規則：最低金額、手續費誰付、幾天內處理、收入何時可提領。
 6. 購買 USDT 的合作網站名單。

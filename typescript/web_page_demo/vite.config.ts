@@ -32,7 +32,7 @@ function singleFile(): Plugin {
 export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
-    liveData({ ...loadEnv(mode, resolve(process.cwd(), '..'), ''), ...process.env } as Record<string, string>),
+    liveData({ ...loadEnv(mode, resolve(process.cwd(), '../..'), ''), ...process.env } as Record<string, string>),
     mode === 'static' && singleFile(),
   ],
   build: mode === 'static' ? { outDir: 'dist-static', modulePreload: false } : undefined,

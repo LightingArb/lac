@@ -2,7 +2,7 @@
 
 LAC 預測市場終端的前端，使用 React 19、TypeScript、Vite 與 React Router。Demo 與 Live 共用版型與互動元件。
 
-完整的安裝、WireGuard、共用環境、資料程式與啟動步驟請看 [repository README](../README.md)。
+完整的安裝、WireGuard、共用環境、資料程式與啟動步驟請看 [repository README](../../README.md)。
 
 ## 開發指令
 
@@ -13,7 +13,7 @@ npm ci
 npm run dev
 ```
 
-網站位於 [http://127.0.0.1:5173/prediction](http://127.0.0.1:5173/prediction)。Vite 讀取父層的 `.env`，檔案中的 `DB_*` 僅用於伺服器；Live middleware 不包含在 `npm run preview` 中。
+網站位於 [http://127.0.0.1:5173/prediction](http://127.0.0.1:5173/prediction)。Vite 讀取上兩層 repository 根目錄的 `.env`，檔案中的 `DB_*` 僅用於伺服器；Live middleware 不包含在 `npm run preview` 中。
 
 ```bash
 npm test
@@ -57,4 +57,4 @@ npm run build
 
 ## 呈現規則
 
-Demo 的模擬資料與 Live 的讀表資料經相同市場元件呈現。Live 的分類、價格欄位、歷史缺點處理，以及各頁 Demo 限制集中說明於 [repository README](../README.md)。
+Demo 的模擬資料與 Live 的讀表資料經相同市場元件呈現。Live 的分類、價格欄位、歷史缺點處理，以及各頁 Demo 限制集中說明於 [repository README](../../README.md)。
