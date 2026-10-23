@@ -6,28 +6,29 @@ LAC 是一個預測市場網站：客戶可以瀏覽 Polymarket 的全部市場�
 
 這個 repository 有兩個部分：
 
-| 目錄                   | 是什麼                                                                                    | 誰負責          |
-| ---------------------- | ----------------------------------------------------------------------------------------- | --------------- |
-| [lac_data/](lac_data/) | Polymarket 全市場資料程式：抓議題、市場、報價與歷史價格，寫進 PostgreSQL                  | B 組（Remy）    |
-| [lac_web/](lac_web/)   | 網站範例（Demo）：前台全部畫面、員工後台、Demo／Live 兩種資料；A 組照著做，可以沿用或重寫 | 範例由 B 組提供 |
+| 目錄                   | 是什麼                                                                                                                                                   | 誰負責          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| [lac_data/](lac_data/) | Polymarket 全市場資料程式：抓議題、市場、報價與歷史價格，寫進 PostgreSQL；規劃中的 `m_signal` 收集各產品訊號、`m_api` 提供對外 HTTP 介面，兩者都還沒實作 | B 組（Remy）    |
+| [lac_web/](lac_web/)   | 網站範例（Demo）：前台全部畫面、員工後台、Demo／Live 兩種資料；A 組照著做，可以沿用或重寫                                                                | 範例由 B 組提供 |
 
-[分工與狀態](#1分工與狀態) · [從零開始跑起來](#2從零開始跑起來) · [專案結構](#3專案結構) · [資料表](#4資料表) · [畫面](#5畫面) · [LAC 訊號](#6lac-訊號telegram) · [商業規則](#7商業規則) · [後台](#8後台) · [開發與檢查](#9開發與檢查) · [常見問題](#10常見問題) · [待確認](#11待確認) · [附錄](#附錄之後才做)
+[分工與狀態](#1分工與狀態) · [從零開始跑起來](#2從零開始跑起來) · [專案結構](#3專案結構) · [資料表](#4資料表) · [畫面](#5畫面) · [對外 HTTP 介面](#6對外-http-介面m_api) · [商業規則](#7商業規則) · [後台](#8後台) · [開發與檢查](#9開發與檢查) · [常見問題](#10常見問題) · [待確認](#11待確認) · [附錄](#附錄之後才做)
 
 ## 1｜分工與狀態
 
-- **A 組（外包）：** 網站與 app 本身，以及會員系統：註冊登入、付費方案、權益與到期、推薦分潤與提領、後台。購買 USDT 的合作網站與金流也由 A 組提供。
-- **B 組（Remy）：** 背後的引擎：Polymarket 市場資料（本 repo 的 `lac_data`）、LAC 訊號、下單引擎（送出交易、確認成交、計算回佣）；客服也由 B 組負責，一律走 Telegram。
-- **交界：** A 組讀 B 組的資料表（§4）、讀 B 組發到 Telegram 群組的訊號（§6）、呼叫 B 組的下單引擎（§7.5）。
+- **A 組（合作夥伴）：** 網站與 app 本身，以及會員系統：註冊登入、付費方案、權益與到期、推薦分潤與提領、後台。購買 USDT 的合作網站與金流也由 A 組提供。
+- **B 組（Remy）：** 背後的引擎：Polymarket 市場資料（本 repo 的 `lac_data`）、LAC 訊號（透過 `m_api` 提供，介面還沒實作）、下單引擎（送出交易、確認成交、計算回佣）；客服也由 B 組負責，一律走 Telegram。
+- **資料交界：** A 組只透過 `m_api`（§6）取得 Polymarket 資料與 LAC 訊號，不直接連資料庫。
+- **下單交界：** A 組的下單畫面呼叫 B 組的下單引擎（§7.5）。
 
-| 功能              | A 組                             | B 組                                      | 狀態       |
-| ----------------- | -------------------------------- | ----------------------------------------- | ---------- |
-| 1. 看市場         | 照 Demo 做畫面，接上 Live 資料表 | 資料程式已經在跑（本 repo），之後還會調整 | 可以開工   |
-| 2. 訊號           | 照 Demo 做畫面，先用假資料       | 訊號系統還在做；格式草稿見 §6             | 先做畫面   |
-| 3. 下單           | 頁面上已有按鈕，先看懂           | 下單引擎；還在等 Polymarket builder 金鑰  | 先看懂就好 |
-| 4. 會員與付費方案 | **最主要外包的部分**             | 提供產品內容與上架規則（§7.1）            | 可以開工   |
-| 5. 推薦分潤與提領 | 做在會員系統裡                   | 提供分潤規則（§7.3）                      | 可以開工   |
-| 6. 購買 USDT      | 提供合作網站與金流               | 只提供畫面範例                            | 可以開工   |
-| 7. 後台           | 參考 Demo，怎麼改、加或刪都可以  | 只提供範例                                | 可以開工   |
+| 功能              | A 組                               | B 組                                                  | 狀態       |
+| ----------------- | ---------------------------------- | ----------------------------------------------------- | ---------- |
+| 1. 看市場         | 照 Demo 做畫面，正式資料接 `m_api` | 資料程式已經在跑；`m_api` 還沒實作，格式草稿見 §6     | 可以開工   |
+| 2. 訊號           | 照 Demo 做畫面，先用假資料         | 訊號系統、`m_signal` 與 `m_api` 還沒好，格式草稿見 §6 | 先做畫面   |
+| 3. 下單           | 頁面上已有按鈕，先看懂             | 下單引擎；還在等 Polymarket builder 金鑰              | 先看懂就好 |
+| 4. 會員與付費方案 | **合作夥伴的主要工作**             | 提供產品內容與上架規則（§7.1）                        | 可以開工   |
+| 5. 推薦分潤與提領 | 做在會員系統裡                     | 提供分潤規則（§7.3）                                  | 可以開工   |
+| 6. 購買 USDT      | 提供合作網站與金流                 | 只提供畫面範例                                        | 可以開工   |
+| 7. 後台           | 參考 Demo，怎麼改、加或刪都可以    | 只提供範例                                            | 可以開工   |
 
 股票、全球體育賠率分析之後才做，見[附錄](#附錄之後才做)。
 
@@ -163,11 +164,18 @@ flowchart LR
     G["Polymarket Gamma API"] --> M["m_live：議題、市場、結果"]
     C["Polymarket CLOB API"] --> Q["m_live：最新報價"]
     H["Polymarket 歷史 API"] --> P["m_historical：分鐘價格"]
-    M --> V["網站伺服器（唯讀）"]
+    M --> V["範例網站伺服器（唯讀）"]
     Q --> V
     P --> V
     V --> L["Live 畫面"]
     D["內建範例資料"] --> R["Demo 畫面"]
+    E["各產品 m_ev 的 Public Table"] --> S["m_signal：收集訊號（還沒實作）"]
+    S --> T["m_signal 訊號表（還沒實作）"]
+    M --> A["m_api：對外 HTTP（還沒實作）"]
+    Q --> A
+    P --> A
+    T --> A
+    A --> U["A 組：網站與 app"]
 ```
 
 ```text
@@ -194,7 +202,7 @@ flowchart LR
 
 ## 4｜資料表
 
-- 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。**A 組只讀不寫**，不用再清洗。
+- 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
 - **更新頻率：** 議題與市場每 600 秒一輪；報價每 600 秒一輪；歷史是一分鐘一筆，手動回補。
 - **層級：** 議題（event）→ 市場（market，畫面上的一個選項列）→ 結果（outcome，例如 Yes 與 No，各有自己的 `asset_id` 與價格）。
 - **價格怎麼讀：**
@@ -206,26 +214,6 @@ flowchart LR
 - **議題網址：** `https://polymarket.com/event/{slug}`。
 - **進行中：** 議題與市場都要 `in_current_scan AND active AND NOT closed AND NOT archived`。同一個議題底下可能有已關閉的市場，要逐一判斷。
 - **歷史：** 只有來源真的有資料的分鐘才有一筆，可能有缺口；畫面上斷線就好，不要補點。
-
-**常用查詢：**
-
-```sql
--- 進行中的議題，照 24 小時成交量排序
-SELECT event_id, title, slug, icon_url, end_at, volume_24h, volume_total, tags
-FROM m_live.m01_gamma_event
-WHERE in_current_scan AND active AND NOT closed AND NOT archived
-ORDER BY volume_24h DESC NULLS LAST, event_id
-LIMIT 50;
-
--- 一個議題底下的選項與最新價格
-SELECT m.market_id, m.group_title, m.question, o.label, o.asset_id,
-       p.midpoint, p.best_bid, p.best_ask, m.liquidity, m.volume_total
-FROM m_live.m01_gamma_market AS m
-JOIN m_live.m01_gamma_outcome AS o ON o.market_id = m.market_id
-LEFT JOIN m_live.m02_clob_price AS p ON p.asset_id = o.asset_id
-WHERE m.event_id = $1 AND m.in_current_scan AND m.active AND NOT m.closed AND NOT m.archived
-ORDER BY m.sort_order, o.outcome_index;
-```
 
 完整定義在 [m_live/sql](lac_data/python/m_live/sql/) 與 [m_historical/sql](lac_data/python/m_historical/sql/)；網站的實際查詢在 [server/live.ts](lac_web/server/live.ts)。
 
@@ -351,61 +339,431 @@ ORDER BY m.sort_order, o.outcome_index;
 
 **尺寸：** 寬螢幕為主，範例已支援手機寬度：低於 768px 選單變抽屜，低於 1200px 訊號欄變抽屜。
 
-## 6｜LAC 訊號（Telegram）
+## 6｜對外 HTTP 介面（m_api）
 
-- B 組的 bot 把訊號發到與 A 組共用的 Telegram 群組，A 組的 bot 讀取後顯示在網站上。
-- **A 組的 bot 要先設定**才收得到別的 bot 的訊息：在 @BotFather 開啟 Bot-to-Bot Communication Mode、在群組裡設為管理員、在 @BotFather 關閉 Group Privacy Mode。
-- 只發 Polymarket 市場的訊號，而且只發 EV 為正的。
-- 訊號出現或內容有變時才發；在到期前失效時發一筆 `status = withdrawn`。過了 `valid_until` 就從畫面拿掉。
-- **訊息格式（草稿）：** 一則訊息是一段 JSON，可以包含多筆訊號。
+**這是草稿：端點與位址還沒跟 A 組對齊，`m_api` 與收集訊號的 `m_signal` 都還沒實作。** A 組正式串接只走這個 HTTP 介面；§2 的 Live 啟動方式是範例網站的本機環境。
+
+`m_signal` 唯讀各產品 `m_ev` 的 Public Table，只收 `market_source = POLYMARKET` 的目前資料，寫進 Web 的訊號表；包含 EV 不為正與 `stale`、`blocked` 等狀態，不重算數值、不重建分類。`m_api` 只讀 Web 的 `m_live`、`m_historical`、`m_signal`，不直接連各產品的資料庫。
+
+### 共通規則
+
+- **位址：** `http://API_HOST:API_PORT`；正式位址待對齊，路徑不加版號。
+- **驗證：** 每個請求的 header 都帶 `Authorization: Bearer <token>`；token 不對回 HTTP 401。
+- **方法：** 只有 GET；只讀，不寫入、不觸發任何運算。
+- **成功回應：** `{ "data": …, "next_cursor": "…" }`；沒有下一頁時 `next_cursor` 是 null，單筆與不分頁的回應也是 null。
+- **錯誤回應：** HTTP 狀態碼加 `{ "error": "代碼", "message": "說明" }`。例如驗證失敗：
 
 ```json
 {
-  "type": "lac_signals",
-  "sent_at": "2026-10-21T12:00:00Z",
-  "signals": [
-    {
-      "signal_id": "weather-34512-1",
-      "status": "active",
-      "product": "weather",
-      "classification_path": [
-        { "kind": "country", "code": "GB", "display": "United Kingdom" },
-        { "kind": "metric", "code": "daily_high", "display": "Daily high" },
-        { "kind": "city", "code": "london", "display": "London" },
-        { "kind": "icao", "code": "EGLC", "display": "EGLC" }
-      ],
-      "event_id": "34512",
-      "market_id": "567890",
-      "asset_id": "6025…9740",
-      "side": "YES",
-      "entry": 0.42,
-      "fair": 0.54,
-      "ev": 0.12,
-      "avg_cost": 0.47,
-      "depth": 2400,
-      "evaluated_at": "2026-10-21T11:59:30Z",
-      "valid_until": "2026-10-21T23:59:00Z"
-    }
-  ]
+  "error": "unauthorized",
+  "message": "無效的 token"
 }
 ```
 
-| 欄位                          | 意思                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------------ |
-| signal_id                     | 訊號編號；同一個編號的新訊息蓋掉舊的                                                 |
-| status                        | active（有效）或 withdrawn（失效，從畫面拿掉）                                       |
-| product                       | weather、crypto、forex、future、sport；決定 Signal 的分類與權益                      |
-| classification_path           | 分類路徑，由上到下；`code` 固定不變、可以比對，`display` 只用來顯示                  |
-| event_id、market_id、asset_id | 對到 §4 的議題、市場、結果；點訊號時靠這三個找到要標黃的那一格                       |
-| side                          | YES 或 NO（Up／Down 類市場一樣用 YES＝第一個結果、NO＝第二個結果，以 asset_id 為準） |
-| entry                         | 現在的買入價                                                                         |
-| fair                          | LAC 算出的合理價                                                                     |
-| ev                            | fair － entry                                                                        |
-| avg_cost                      | 從現在的掛單一路買到 fair 為止的平均成本                                             |
-| depth                         | 在 fair 以下可以買到的份數                                                           |
-| evaluated_at、valid_until     | 算出這筆的時間、有效到幾點                                                           |
+- **時間：** 一律 UTC、ISO-8601，例如 `2026-10-21T12:00:00Z`。
+- **數值：** 資料庫裡是 numeric 的值用字串傳，例如 `"0.425"`，不轉成浮點數；整數計數與布林值維持 JSON number 與 boolean。null 照實給，不補值。
+- **分頁：** 支援分頁的端點用 `limit` 與 `cursor`；`limit` 預設 100、最多 500。`cursor` 原樣帶回上一頁的 `next_cursor`，不自行解析；翻頁時保留相同的篩選條件。
+- **範例：** 以下編號與內容都是格式示意，不代表實際行情。§4 已定義的欄位沿用同名、同義與 null 規則。
 
-**新項目怎麼進後台（建議，待確認）：** 用 `classification_path` 的某一層當「項目」：天氣是城市、加密貨幣是幣種加週期、外匯是貨幣對、期貨是商品代號、體育是運動種類。後台第一次看到某個產品底下沒見過的 `code`，就把它放進「待審核的新項目」（§7.1）。
+### 議題的補充欄位
+
+| 欄位                      | 型別          | 意思                                                                                                                                                 |
+| ------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| market_count              | integer       | 議題底下符合 §4 進行中規則的市場數                                                                                                                   |
+| lac                       | array 或 null | 議題底下沒有任何訊號時是 null；有的話，每個元素是 `{ product, classification_path }`，相同組合只列一次，包含非 active 或 EV 不為正的訊號所代表的覆蓋 |
+| lac[].product             | string        | 訊號所屬產品，值見下方訊號欄位表                                                                                                                     |
+| lac[].classification_path | array 或 null | 與訊號的分類路徑同義；分類缺少時保留 null                                                                                                            |
+
+### GET /status
+
+**參數：** 無。
+
+回傳各資料最近一次更新的時間。議題與市場看最近一次**完整掃描**，不能拿掃描途中更新的單筆時間當成完整發布；價格與每個產品的訊號分開看。尚無更新時間時是 null。
+
+| data 欄位          | 型別            | 意思                                                             |
+| ------------------ | --------------- | ---------------------------------------------------------------- |
+| events_updated_at  | UTC 時間或 null | 議題最近一次完整掃描的更新時間                                   |
+| markets_updated_at | UTC 時間或 null | 市場最近一次完整掃描的更新時間                                   |
+| prices_updated_at  | UTC 時間或 null | 價格最近一次更新時間                                             |
+| signals_updated_at | object          | 以 product 為鍵，值為該產品訊號最近一次收集時間；還沒收集是 null |
+
+```json
+{
+  "data": {
+    "events_updated_at": "2026-10-21T12:00:00Z",
+    "markets_updated_at": "2026-10-21T12:00:00Z",
+    "prices_updated_at": "2026-10-21T12:00:00Z",
+    "signals_updated_at": {
+      "weather": "2026-10-21T11:59:30Z",
+      "crypto": "2026-10-21T11:59:00Z",
+      "forex": null,
+      "future": null,
+      "sport": null,
+      "stock": null
+    }
+  },
+  "next_cursor": null
+}
+```
+
+### GET /events?tag=&q=&lac=&cursor=&limit=
+
+只列 §4 定義的進行中議題，依 `volume_24h` 由大到小。每筆包含 §4 議題表全部欄位，**不含 `in_current_scan`**，另加 `market_count` 與 `lac`。
+
+| Query 參數    | 必填 | 意思                                                        |
+| ------------- | ---- | ----------------------------------------------------------- |
+| tag           | 否   | Polymarket 標籤的 slug，例如 `weather`；省略時不限標籤      |
+| q             | 否   | 標題關鍵字；省略時不篩選標題                                |
+| lac           | 否   | `true` 只列 LAC 有覆蓋的議題；省略或 `false` 時不限覆蓋狀態 |
+| cursor、limit | 否   | 見共通分頁規則                                              |
+
+```json
+{
+  "data": [
+    {
+      "event_id": "34512",
+      "slug": "highest-temperature-in-london-on-october-21",
+      "title": "Highest temperature in London on October 21?",
+      "description": "Daily high temperature at EGLC.",
+      "resolution_source": null,
+      "image_url": null,
+      "icon_url": null,
+      "start_at": "2026-10-21T00:00:00Z",
+      "end_at": "2026-10-21T23:59:00Z",
+      "active": true,
+      "closed": false,
+      "archived": false,
+      "volume_total": "125000.50",
+      "volume_24h": "24000.25",
+      "liquidity": "30000",
+      "tags": [
+        {
+          "id": "84",
+          "label": "Weather",
+          "slug": "weather"
+        }
+      ],
+      "source_updated_at": "2026-10-21T11:58:00Z",
+      "observed_at": "2026-10-21T12:00:00Z",
+      "market_count": 1,
+      "lac": [
+        {
+          "product": "weather",
+          "classification_path": [
+            {
+              "kind": "country",
+              "code": "GB",
+              "display": "United Kingdom"
+            },
+            {
+              "kind": "metric",
+              "code": "daily_high",
+              "display": "Daily high"
+            },
+            {
+              "kind": "city",
+              "code": "london",
+              "display": "London"
+            },
+            {
+              "kind": "icao",
+              "code": "EGLC",
+              "display": "EGLC"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+### GET /events/{event_id}
+
+| Path 參數 | 必填 | 意思          |
+| --------- | ---- | ------------- |
+| event_id  | 是   | §4 的議題編號 |
+
+回傳一個議題（欄位與 `/events` 每筆相同），加上 `markets` 陣列，包含底下**全部進行中的市場**，不分頁。每個市場用 §4 市場表欄位並帶 `outcomes`；每個結果用 §4 結果表欄位並帶 `price`。`price` 是 §4 價格表欄位組成的物件；沒有價格時整個 `price` 是 null，不補零。
+
+```json
+{
+  "data": {
+    "event_id": "34512",
+    "slug": "highest-temperature-in-london-on-october-21",
+    "title": "Highest temperature in London on October 21?",
+    "description": "Daily high temperature at EGLC.",
+    "resolution_source": null,
+    "image_url": null,
+    "icon_url": null,
+    "start_at": "2026-10-21T00:00:00Z",
+    "end_at": "2026-10-21T23:59:00Z",
+    "active": true,
+    "closed": false,
+    "archived": false,
+    "volume_total": "125000.50",
+    "volume_24h": "24000.25",
+    "liquidity": "30000",
+    "tags": [
+      {
+        "id": "84",
+        "label": "Weather",
+        "slug": "weather"
+      }
+    ],
+    "source_updated_at": "2026-10-21T11:58:00Z",
+    "observed_at": "2026-10-21T12:00:00Z",
+    "market_count": 1,
+    "lac": [
+      {
+        "product": "weather",
+        "classification_path": [
+          {
+            "kind": "country",
+            "code": "GB",
+            "display": "United Kingdom"
+          },
+          {
+            "kind": "metric",
+            "code": "daily_high",
+            "display": "Daily high"
+          },
+          {
+            "kind": "city",
+            "code": "london",
+            "display": "London"
+          },
+          {
+            "kind": "icao",
+            "code": "EGLC",
+            "display": "EGLC"
+          }
+        ]
+      }
+    ],
+    "markets": [
+      {
+        "market_id": "567890",
+        "event_id": "34512",
+        "sort_order": 0,
+        "condition_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "protocol_version": "v1",
+        "slug": "highest-temperature-in-london-on-october-21-20c",
+        "question": "Will the highest temperature in London be 20°C on October 21?",
+        "group_title": "20°C",
+        "description": "Daily high temperature at EGLC.",
+        "resolution_source": null,
+        "image_url": null,
+        "icon_url": null,
+        "start_at": "2026-10-21T00:00:00Z",
+        "end_at": "2026-10-21T23:59:00Z",
+        "active": true,
+        "closed": false,
+        "archived": false,
+        "accepting_orders": true,
+        "enable_order_book": true,
+        "volume_total": "125000.50",
+        "volume_24h": "24000.25",
+        "liquidity": "30000",
+        "source_updated_at": "2026-10-21T11:58:00Z",
+        "in_current_scan": true,
+        "observed_at": "2026-10-21T12:00:00Z",
+        "outcomes": [
+          {
+            "market_id": "567890",
+            "outcome_index": 0,
+            "label": "Yes",
+            "token_id": "60259740",
+            "position_id": null,
+            "asset_id": "60259740",
+            "price": {
+              "asset_id": "60259740",
+              "best_bid": "0.41",
+              "best_ask": "0.42",
+              "midpoint": "0.415",
+              "last_trade_price": "0.42",
+              "last_trade_side": "BUY",
+              "quote_observed_at": "2026-10-21T12:00:00Z",
+              "mid_observed_at": "2026-10-21T12:00:00Z",
+              "last_observed_at": "2026-10-21T12:00:00Z"
+            }
+          },
+          {
+            "market_id": "567890",
+            "outcome_index": 1,
+            "label": "No",
+            "token_id": "60259741",
+            "position_id": null,
+            "asset_id": "60259741",
+            "price": null
+          }
+        ]
+      }
+    ]
+  },
+  "next_cursor": null
+}
+```
+
+### GET /prices?asset_ids=&cursor=&limit=
+
+回傳最新價格，每筆欄位見 §4 的 `m_live.m02_clob_price`。
+
+| Query 參數    | 必填 | 意思                                                                                        |
+| ------------- | ---- | ------------------------------------------------------------------------------------------- |
+| asset_ids     | 否   | 逗號分隔的 Polymarket 結果編號，最多 500 個；給了就只回這些結果的最新價格，不給就分頁回全部 |
+| cursor、limit | 否   | 見共通分頁規則；指定 asset_ids 時也按此分頁                                                 |
+
+```json
+{
+  "data": [
+    {
+      "asset_id": "60259740",
+      "best_bid": "0.41",
+      "best_ask": "0.42",
+      "midpoint": "0.415",
+      "last_trade_price": "0.42",
+      "last_trade_side": "BUY",
+      "quote_observed_at": "2026-10-21T12:00:00Z",
+      "mid_observed_at": "2026-10-21T12:00:00Z",
+      "last_observed_at": "2026-10-21T12:00:00Z"
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+### GET /history?asset_ids=&from=&to=
+
+| Query 參數 | 必填 | 意思                                              |
+| ---------- | ---- | ------------------------------------------------- |
+| asset_ids  | 是   | 逗號分隔的結果編號，一次最多 20 個                |
+| from       | 否   | 查詢開始時間，UTC、ISO-8601；省略時不限制開始時間 |
+| to         | 否   | 查詢結束時間，UTC、ISO-8601；省略時不限制結束時間 |
+
+`from`、`to` 都不給就是全部歷史；此端點不分頁。每個 `asset_id` 回 `coverage` 與 `points`：`coverage` 沿用 §4 抓取狀態表的全部欄位，還沒抓是 null；`points` 每筆只有 §4 的 `minute_at`、`price`。查不到點時是空陣列；來源缺分鐘就留缺口，不補點。
+
+```json
+{
+  "data": [
+    {
+      "asset_id": "60259740",
+      "coverage": {
+        "asset_id": "60259740",
+        "requested_start": "2026-10-21T11:58:00Z",
+        "requested_end": "2026-10-21T12:00:00Z",
+        "checked_at": "2026-10-21T12:01:00Z",
+        "status": "success",
+        "point_count": 2,
+        "error_reason": null
+      },
+      "points": [
+        {
+          "minute_at": "2026-10-21T11:58:00Z",
+          "price": "0.41"
+        },
+        {
+          "minute_at": "2026-10-21T11:59:00Z",
+          "price": "0.42"
+        }
+      ]
+    },
+    {
+      "asset_id": "60259741",
+      "coverage": null,
+      "points": []
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+### GET /signals?product=&event_id=&cursor=&limit=
+
+回傳目前全部訊號，包含非 `active`、EV 不為正的資料，不在 API 端篩成可顯示訊號。
+
+| Query 參數    | 必填 | 意思                                                 |
+| ------------- | ---- | ---------------------------------------------------- |
+| product       | 否   | 篩選一個產品；省略時回全部產品。允許的值見下方欄位表 |
+| event_id      | 否   | 篩選 §4 的議題編號；省略時不限議題                   |
+| cursor、limit | 否   | 見共通分頁規則                                       |
+
+| 訊號欄位                  | 型別                | 意思                                                                                                                                                      |
+| ------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| signal_id                 | string              | 穩定的訊號編號；同一個編號的新資料蓋掉舊的                                                                                                                |
+| product                   | string              | weather、crypto、forex、future、sport、stock（stock 之後才有）；決定 Signal 的分類與權益                                                                  |
+| status                    | string              | `active`（可以用）或其他狀態，例如 `stale`、`blocked`                                                                                                     |
+| reason                    | string 或 null      | 不是 `active` 時必須寫明原因；`active` 且沒有原因時是 null                                                                                                |
+| classification_path       | array 或 null       | 分類路徑，由上到下；每層是 `{ kind, code, display? }`，`code` 固定不變、可以比對，`display` 只用來顯示。必要分類缺少時是 null，並在 reason 說明，不猜分類 |
+| market_url                | string 或 null      | 官方市場網址或 null；不從標題拼網址，不拿首頁或 API 位址替代                                                                                              |
+| event_id、market_id       | string 或 null      | 由 `m_api` 用 Polymarket 編號從 §4 的表對出議題與市場，對不到是 null；配合 asset_id 找到點訊號時要標黃的那一格                                            |
+| condition_id、asset_id    | string 或 null      | Polymarket 的條件編號與該結果的編號，原樣保留，不從標題或網址推；缺少時是 null 並在 reason 說明                                                           |
+| side                      | string              | YES 或 NO（Up／Down 類市場一樣用 YES＝第一個結果、NO＝第二個結果，以 asset_id 為準）                                                                      |
+| entry                     | numeric 字串或 null | 現在的買入價                                                                                                                                              |
+| fair                      | numeric 字串或 null | LAC 算出的合理價                                                                                                                                          |
+| ev                        | numeric 字串或 null | fair － entry；由上游提供，Web 不重算                                                                                                                     |
+| avg_cost                  | numeric 字串或 null | 從現在的掛單一路買到 fair 為止的平均成本                                                                                                                  |
+| depth                     | numeric 字串或 null | 在 fair 以下可以買到的份數                                                                                                                                |
+| evaluated_at、valid_until | UTC 時間或 null     | 算出這筆的時間、有效到幾點；缺少時保留 null，不推算                                                                                                       |
+
+```json
+{
+  "data": [
+    {
+      "signal_id": "weather-34512-1",
+      "product": "weather",
+      "status": "active",
+      "reason": null,
+      "classification_path": [
+        {
+          "kind": "country",
+          "code": "GB",
+          "display": "United Kingdom"
+        },
+        {
+          "kind": "metric",
+          "code": "daily_high",
+          "display": "Daily high"
+        },
+        {
+          "kind": "city",
+          "code": "london",
+          "display": "London"
+        },
+        {
+          "kind": "icao",
+          "code": "EGLC",
+          "display": "EGLC"
+        }
+      ],
+      "market_url": "https://polymarket.com/event/highest-temperature-in-london-on-october-21",
+      "event_id": "34512",
+      "market_id": "567890",
+      "condition_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "asset_id": "60259740",
+      "side": "YES",
+      "entry": "0.42",
+      "fair": "0.54",
+      "ev": "0.12",
+      "avg_cost": "0.47",
+      "depth": "2400",
+      "evaluated_at": "2026-10-21T11:59:30Z",
+      "valid_until": "2026-10-21T23:59:00Z"
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+**顯示與更新：**
+
+- 網站只把 `status = active` 且 `ev > 0`、目前時間早於 `valid_until` 的資料當成訊號顯示；缺少可判斷的 EV 或有效期限時不能當成可用訊號。其他資料只代表這個議題在 LAC 的覆蓋範圍內。
+- 到了 `valid_until` 就從訊號畫面拿掉，不等下一次 HTTP 回應。
+- `/signals` 只有目前的資料，沒有歷史或差異 feed。上一次拿到、這一次沒有的訊號就是已經失效，從畫面拿掉。
+- 比對是否消失時，先在**相同篩選條件**下成功取完所有分頁（`next_cursor = null`），再用完整集合取代上一輪；單頁缺少、請求失敗或切換篩選不能當成訊號失效。
+
+**新項目怎麼進後台（建議，待確認）：** 用 `classification_path` 的某一層當「項目」：天氣是城市、加密貨幣是幣種加週期、外匯是貨幣對、期貨是商品代號、體育是運動種類。後台在 `/signals` 第一次看到某個產品底下沒見過的 `code`，就把它放進「待審核的新項目」（§7.1）。
 
 ## 7｜商業規則
 
@@ -433,7 +791,7 @@ ORDER BY m.sort_order, o.outcome_index;
 - **結構：** 所有人都在官方底下。官方先拿 20%，剩下 80% 往下一層一層分。
 - 每一層只能設定**直屬下一層**的比例，不能超過自己的比例；自己拿到的＝自己的比例－給下一層的比例。
 - **例子：** 官方給 B 80%，B 給 C 55%。C 這條線產生 100 美元 → 官方 20、B 25、C 55。
-- **一般調整（每一層都可以）：** 只能多給下面，不能少給。例如官方原本自己拿 20%，之後只能調成 19%、18%…，不能超過 20%。任何調整**隔天才生效**，以倫敦時間（UTC+0）的 00:00 為界，畫面上要寫清楚。
+- **一般調整（每一層都可以）：** 只能多給下面，不能少給。例如官方自己拿 20% 時，之後只能調成 19%、18%…，不能超過 20%。任何調整**隔天才生效**，以倫敦時間（UTC+0）的 00:00 為界，畫面上要寫清楚。
 - **按比例縮減（只有官方可以）：** 把整條線的比例按同一個比例一起砍，砍下來的全部回到官方。例：上面的例子砍 50% → C 從 55% 變 27.5%、B 從 25% 變 12.5%、官方從 20% 變 60%。之後官方可以再決定多給某條線（回到一般調整，只能加）。
 - 比例取到小數點後 6 位。
 - 推薦碼在 Settings 隨時可改，不限次數；推薦連結跟著換。
@@ -468,7 +826,7 @@ ORDER BY m.sort_order, o.outcome_index;
 
 | 頁面 | 做什麼                                                                                                                            |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 待辦 | 所有等人處理的事：待審提領、TG 新項目、7 天內到期的權益、付款失敗；點一行就到處理它的地方                                         |
+| 待辦 | 所有等人處理的事：待審提領、訊號的新項目、7 天內到期的權益、付款失敗；點一行就到處理它的地方                                      |
 | 會員 | 列表 → 會員詳情：權益（產品版本、包含項目、期間、來源）、手動開通、改到期日、升級到新版、撤銷、付款與退款、提領、代理線、操作紀錄 |
 | 產品 | 每個產品目前上架的版本與歷史版本、建立並發布新版、審核新項目、兌換碼                                                              |
 | 出金 | 提領審核：核准、駁回、貼交易 hash 標記已出款                                                                                      |
@@ -496,6 +854,7 @@ uv run ruff format --check .
 
 ## 10｜常見問題
 
+- **對外介面還沒實作：** `m_api` 還沒實作；範例網站的 Live 由網站伺服器直接讀表，A 組正式串接走 `m_api`（§6）。
 - **範例沒有真實交易：** 登入、訂閱、兌換、Telegram 綁定、Yes／No 下單按鈕都還沒接服務；Live 不計算 LAC 的 fair／EV，也沒有真實訊號。
 - **範例的資料重新整理就重設：** 推薦碼、代理比例、提領申請、後台操作都存在頁面記憶體；只有語言選擇記在瀏覽器。
 - **錢包與交易是展示：** 「連接錢包」「啟用交易」只切換畫面狀態，不簽名、不儲存任何憑證。
@@ -506,8 +865,8 @@ uv run ruff format --check .
 
 ## 11｜待確認
 
-1. 正式環境的資料表放哪台主機、A 組怎麼連。
-2. Telegram 訊息格式（§6 是草稿）與「項目」取 `classification_path` 的哪一層。
+1. `m_api` 的正式位址與 token 怎麼交付、端點格式（§6 是草稿）。
+2. 「項目」取 `classification_path` 的哪一層。
 3. 下單：A 組畫面呼叫 B 組下單引擎的介面。
 4. 各產品價格、付款方式。
 5. 提領規則：最低金額、手續費誰付、幾天內處理、收入何時可提領。
