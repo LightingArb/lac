@@ -103,7 +103,7 @@ uv run --env-file ../.env python -m m_historical.all_setup
 
 ```text
 SETUP_OK m_live tables=6
-SETUP_OK m_historical tables=2
+SETUP_OK m_historical tables=1
 ```
 
 setup 可以重跑：缺的表會補上，已經存在的表會檢查欄位，不一致就報錯（不會自動遷移）。
@@ -125,19 +125,17 @@ uv run --env-file ../.env python -m m_live.all_runtime
 
 四個對外請求 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的額外 IP（JSON array）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。額外 IP 必須存在於本機網卡，否則服務啟動失敗；額外 IP 的請求會綁定來源位址。每個 IP 的 clob 最多 16 個在途請求，book、recent、full 各最多 4 個，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該 IP 的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
 
-**選用：歷史價格（走勢圖用）。** 歷史是手動跑的單次工作，不會跟著上面的程式自動更新。預設抓 24 小時成交量前 500 個進行中議題的全部結果，固定抓最近 3 天：
+**歷史價格（另一個資料終端機）。** `runtime_history` 常駐補最近 7 個完整 UTC 日，每市場每天保存第一個結果的分鐘價格；昨天在 00:10 UTC 後才抓，最舊的天優先。有列就不重抓、不覆蓋。
 
 ```bash
 cd python
-uv run --env-file ../.env python -m m_historical.all_runtime --once --days 3 --top-events 500
+uv run --env-file ../.env python -m m_historical.all_runtime
 ```
 
-中途中斷想續跑，要用同一個結束時間，已完成的會跳過：
+可加 `--once` 執行至目前待處理工作完成後結束；仍有 pending 時會立即續輪。每輪最多 10,000 個市場日，沒有待抓工作時休息 60 秒；中斷後直接重啟，依資料庫重新挑未抓的市場日。SIGTERM／Ctrl+C 會完成當輪再退出。
 
-```bash
-LAC_HISTORY_END=$(date -u +%Y-%m-%dT%H:%M:00Z)
-uv run --env-file ../.env python -m m_historical.all_runtime --once --days 3 --top-events 500 --end "$LAC_HISTORY_END"
-```
+歷史與 m_live 共用主機預設出口及 `OUTBOUND_IPS`，每 IP 在途 16，Data API `/v2/prices-history` 每 10 秒最多 200 次。每輪重用一條 autocommit 連線，HTTP 與寫入分開，待寫入最多 8 批（含正在寫的一批）；單市場錯誤記 log 並留待下輪，權限與限流沿用共用排程規則。
+
 
 ### 6. 啟動網站（終端機二）
 
@@ -160,10 +158,12 @@ npm run dev
 psql "postgresql://admin:admin@127.0.0.1:5432/lac_data" -c \
   "SELECT (SELECT count(*) FROM m_live.m01_event) AS events,
           (SELECT count(*) FROM m_live.m02_clob_price) AS prices,
-          (SELECT count(*) FROM m_live.m03_clob_book) AS books;"
+          (SELECT count(*) FROM m_live.m03_clob_book) AS books,
+          (SELECT count(*) FROM m_historical.m01_price_day) AS history_days,
+          (SELECT count(*) FROM m_historical.m01_price_day WHERE prices IS NULL) AS history_empty_days;"
 ```
 
-這三個數字用來確認資料程式有寫入；前端 Live 接線狀態見上方。
+這些數字確認表內已有發布資料；歷史缺列代表尚未成功抓取，有列但 prices 為 null 代表該日沒有可存的分鐘點。數量不代表涵蓋完整或報價新鮮度，請同時查看 requested_at、來源時間與執行紀錄。前端 Live 接線狀態見上方。
 
 ## 3｜專案結構
 
@@ -205,7 +205,7 @@ flowchart LR
 │   │       │   ├── runtime_gamma_full.py    # 完整議題掃描
 │   │       │   └── runtime_demand.py        # 合併產品需求
 │   │       └── m02_price/runtime_clob.py    # 依需求到期時間抓最佳買賣價
-│   └── m_historical/          # 歷史分鐘價格（手動單次）
+│   └── m_historical/          # 歷史分鐘價格（UTC 日陣列、常駐）
 └── typescript/
     └── web_page_demo/
         ├── server/live.ts     # 網站伺服器的唯讀資料庫查詢（/api/live/*）
@@ -219,7 +219,7 @@ flowchart LR
 ## 4｜資料表
 
 - 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
-- **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；整本掛單簿預設每 300 秒，產品要求深度時依需求間隔；歷史是一分鐘一筆，手動回補。
+- **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；整本掛單簿預設每 300 秒，產品要求深度時依需求間隔；歷史每分鐘一格、每日一列，常駐補最近 7 個完整 UTC 日。
 - **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查。
 - **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描只撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。identity 與結算永久保留。
 - **結算：** resolution_status 原樣存 v1 的 umaResolutionStatus 或 v2 的 resolutionStatus；只有 resolved 才寫各 outcome 的 resolved_price，包含 0.5／0.5。closed 或 1／0 價格本身不代表定案。resolved_seen_at 是 Web 首次看到 resolved 的時間，只寫一次；這是 Gamma 回報的結算，沒有宣稱鏈上付款已驗證。
@@ -233,7 +233,7 @@ flowchart LR
 - **時間：** 全部是 UTC，畫面上再轉成使用者的時區。
 - **議題網址：** `https://polymarket.com/event/{slug}`。
 - **進行中：** 議題與市場都要 `in_current_scan AND active AND NOT closed AND NOT archived`。同一個議題底下可能有已關閉的市場，要逐一判斷。
-- **歷史：** 只有來源真的有資料的分鐘才有一筆，可能有缺口；畫面上斷線就好，不要補點。
+- **歷史：** 只存來源 resolution_seconds=60 的點；陣列 null 格代表分鐘缺口，畫面斷線，不補點。只抓第一結果，第二結果以 1 減第一結果推導；結算資訊讀 m_live 的 m01。
 
 完整定義在 [m_live/sql](python/m_live/sql/) 與 [m_historical/sql](python/m_historical/sql/)；網站的實際查詢在 [server/live.ts](typescript/web_page_demo/server/live.ts)。
 
@@ -334,26 +334,23 @@ flowchart LR
 
 每批寫入重新確認需求及第一結果 identity，舊 requested_at 不蓋新列；每輪先刪除需求外的掛單簿。還有到期市場回 pending，完成後休息 0.5 秒。requested_at 與來源 timestamp 不相互替代；資料可用性與新鮮度由讀取端判斷。
 
-**`m_historical.m01_polymarket_price`**：一列＝一個結果在一分鐘的價格；主鍵 `asset_id`＋`minute_at`。走勢圖用。
+**`m_historical.m01_price_day`**：一列＝一個市場一個 UTC 日；主鍵 `(market_id, day)`。market_id 外鍵參照 m_live.m01_market。只存第一個結果，永久保留。
 
-| 欄位               | 型別        | 意思                  |
-| ------------------ | ----------- | --------------------- |
-| asset_id           | text        | 哪一個結果            |
-| minute_at          | timestamptz | 哪一分鐘              |
-| source_at          | timestamptz | Polymarket 的實際時間 |
-| price              | numeric     | 價格                  |
-| resolution_seconds | integer     | 間隔，一般是 60       |
+| 欄位 | 型別 | 意思 |
+| --- | --- | --- |
+| market_id | text | 市場編號 |
+| asset_id | text | 第一個結果的 asset |
+| day | date | UTC 日期 |
+| prices | numeric[]? | 恰好 1,440 格，第 1 格是 00:00；缺分鐘為 null，無可存分鐘時整欄 null |
+| requested_at | timestamptz | 送出請求前的 UTC 時間 |
+| m_historical_updated_at | timestamptz | 實際發布時間 |
 
-**`m_historical.m01_polymarket_coverage`**：一列＝一個結果的歷史抓取狀態；主鍵 `asset_id`。用來分辨「沒有歷史資料」與「還沒抓」。
+選取條件：created_at 早於該日結束，且尚未關閉或 closed_time 晚於該日開始；已關閉但 closed_time 不明的不抓。只處理恰好兩個結果且都有 asset 的市場。範圍是今天往前 7 個完整 UTC 日；00:10 前略過昨天，不把最舊日延伸成第 8 天。排序為 day、market_id，已有列的不再選取。
 
-| 欄位                           | 型別        | 意思                                   |
-| ------------------------------ | ----------- | -------------------------------------- |
-| asset_id                       | text        | 哪一個結果                             |
-| requested_start、requested_end | timestamptz | 已抓的時間範圍                         |
-| checked_at                     | timestamptz | 抓完的時間                             |
-| status                         | text        | success 或 error                       |
-| point_count                    | integer?    | 有幾分鐘的資料；0 代表這段時間沒有資料 |
-| error_reason                   | text?       | 失敗原因                               |
+每市場日一個公開 GET /v2/prices-history：token_id、start、end、bucket_seconds=60、limit=10000；若需要翻頁則視為該市場日回應不合法。只保留當日半開區間 [00:00, 隔日 00:00) 的 resolution_seconds=60 點，排除 resolution_seconds=0 尾點，同分鐘取 timestamp 較新的點。
+
+插入使用 `ON CONFLICT (market_id, day) DO NOTHING`。成功空日也寫一列；請求或解析失敗不寫列並記錄錯誤，下輪仍可挑到。資料有列不代表 1,440 分鐘都有觀測；API 本身可能稀疏。每個結果一天最多 1,440 個可存分鐘，沒有補值、插值或尾點替換。
+
 
 **Live 畫面目前的讀法（範例網站）：**
 
@@ -700,42 +697,8 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 | from       | 否   | 查詢開始時間，UTC、ISO-8601；省略時不限制開始時間 |
 | to         | 否   | 查詢結束時間，UTC、ISO-8601；省略時不限制結束時間 |
 
-`from`、`to` 都不給就是全部歷史；此端點不分頁。每個 `asset_id` 回 `coverage` 與 `points`：`coverage` 沿用 §4 抓取狀態表的全部欄位，還沒抓是 null；`points` 每筆只有 §4 的 `minute_at`、`price`。查不到點時是空陣列；來源缺分鐘就留缺口，不補點。
+此歷史 HTTP 介面尚未實作，回傳格式需在 m_api 施工前依 §4 的每日陣列表定案。來源只有 `m_historical.m01_price_day`，不另有 coverage 表；未抓的市場日沒有列，成功空日有列且 prices 為 null。讀取端需保留這個差別，展開分鐘時忽略 null 格，不補點；第二個結果的價格是推導值。
 
-```json
-{
-  "data": [
-    {
-      "asset_id": "60259740",
-      "coverage": {
-        "asset_id": "60259740",
-        "requested_start": "2026-10-21T11:58:00Z",
-        "requested_end": "2026-10-21T12:00:00Z",
-        "checked_at": "2026-10-21T12:01:00Z",
-        "status": "success",
-        "point_count": 2,
-        "error_reason": null
-      },
-      "points": [
-        {
-          "minute_at": "2026-10-21T11:58:00Z",
-          "price": "0.41"
-        },
-        {
-          "minute_at": "2026-10-21T11:59:00Z",
-          "price": "0.42"
-        }
-      ]
-    },
-    {
-      "asset_id": "60259741",
-      "coverage": null,
-      "points": []
-    }
-  ],
-  "next_cursor": null
-}
-```
 
 ### GET /signals?product=&event_id=&cursor=&limit=
 
@@ -923,7 +886,7 @@ uv run ruff format --check .
 - **`npm run preview` 或直接開 `dist/` 看不到 Live：** Live 的資料庫查詢只在 `npm run dev` 的伺服器裡。
 - **網站起不來或 Live 連不到：** 檢查 `.env` 五個欄位、PostgreSQL 16 有在 5432 跑、兩個 setup 都成功；網站固定用 5173，被占用會直接報錯。
 - **資料程式出現 `provider_error`：** `status: 0` 是連不到 Polymarket（網路或地區封鎖，開 VPN）；401／403 會讓那個單位暫停，處理好再重開。
-- **Live 價格或歷史沒更新：** 讀表成功不代表來源已刷新，看資料程式的 `published`／`round_finished` 紀錄；歷史要另外手動回補。
+- **Live 價格或歷史沒更新：** 讀表成功不代表來源已刷新，看資料程式的 `published`／`round_finished` 紀錄；歷史由另一個常駐的 m_historical 程式補抓，需確認該入口也正在執行。
 
 ## 11｜待確認
 

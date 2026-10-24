@@ -54,11 +54,11 @@ def h_setup(schema: str, directory: Path) -> None:
             columns = {}
             for line in match[3].splitlines():
                 column = re.match(
-                    r'\s*"?([a-z][a-z0-9_]*)"?\s+(TEXT|NUMERIC|INTEGER|BOOLEAN|JSONB|TIMESTAMPTZ)\b',
+                    r'\s*"?([a-z][a-z0-9_]*)"?\s+(TEXT|NUMERIC|INTEGER|BOOLEAN|JSONB|TIMESTAMPTZ|DATE)\b(\s*\[\])?',
                     line,
                 )
                 if column:
-                    kind = column[2].lower()
+                    kind = column[2].lower() + ("[]" if column[3] else "")
                     columns[column[1]] = {"timestamptz": "timestamp with time zone"}.get(kind, kind)
             declared[match[2]] = columns
     with h_connect() as connection:
@@ -77,7 +77,11 @@ def h_setup(schema: str, directory: Path) -> None:
         for table in existing:
             actual = dict(
                 connection.execute(
-                    "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = %s AND table_name = %s",
+                    """SELECT a.attname,format_type(a.atttypid,NULL)
+                    FROM pg_attribute AS a
+                    JOIN pg_class AS c ON c.oid=a.attrelid
+                    JOIN pg_namespace AS n ON n.oid=c.relnamespace
+                    WHERE n.nspname=%s AND c.relname=%s AND a.attnum>0 AND NOT a.attisdropped""",
                     (schema, table),
                 ).fetchall()
             )

@@ -208,8 +208,16 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
             },
             target=batch,
         )
-        if not isinstance(response, list) or {str(e["id"]) for e in response} != set(batch):
-            raise ContractError("Gamma event batch did not return all requested parents")
+        if not isinstance(response, list) or any(
+            not isinstance(event, dict) or "id" not in event for event in response
+        ):
+            raise ContractError("Invalid Gamma event batch")
+        returned = {str(event["id"]) for event in response}
+        if not returned.issubset(batch) or len(returned) != len(response):
+            raise ContractError("Gamma event batch returned unexpected/duplicate parents")
+        absent = sorted(set(batch) - returned)
+        if absent:
+            h_log("runtime_gamma_recent", "parents_unavailable", level="warning", event_ids=absent)
         for event in response:
             if event.get("tags") is not None and not isinstance(event["tags"], list):
                 raise ContractError("Gamma parent lookup lacks tags; design review required")
@@ -224,6 +232,8 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         events.append(s03_event(event, observed))
     for market_id in sorted(raw):
         event_id = market_parents[market_id]
+        if event_id not in parents:
+            continue
         if market_id not in ordinals[event_id]:
             raise ContractError("Gamma market missing from its parent lookup")
         row, results = s04_market(

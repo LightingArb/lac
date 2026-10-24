@@ -23,6 +23,28 @@ EVENT = json.loads((Path(__file__).parent / "gamma_event.json").read_text())
 NOW = datetime.now(UTC)
 
 
+def test_recent_missing_parent_skips_only_its_markets_and_warns(monkeypatch, capsys):
+    client = IPPool("test", [], 1, {"/events": (100, 10)}, HttpPolicy(30, 0, 60, 1000000))
+    available = copy.deepcopy(EVENT["markets"][2])
+    unavailable = copy.deepcopy(available)
+    available["events"] = [{"id": EVENT["id"]}]
+    unavailable["id"] = "missing-market"
+    unavailable["events"] = [{"id": "missing-parent"}]
+    raw = {
+        available["id"]: available | {"_web_seen_at": NOW},
+        unavailable["id"]: unavailable | {"_web_seen_at": NOW},
+    }
+    monkeypatch.setattr(client, "request", lambda *args, **kwargs: [EVENT])
+    events, markets, outcomes = recent.c03_parse(client, raw, 100)
+    assert [event[0] for event in events] == [EVENT["id"]]
+    assert [market[0] for market in markets] == [available["id"]]
+    assert {outcome[0] for outcome in outcomes} == {available["id"]}
+    warning = json.loads(capsys.readouterr().out)
+    assert warning["event"] == "parents_unavailable"
+    assert warning["level"] == "warning" and warning["event_ids"] == ["missing-parent"]
+    client.close()
+
+
 @pytest.mark.parametrize("parse", [full.s01_event, recent.s03_event])
 def test_real_event_without_tag_relation(parse):
     record = json.loads((Path(__file__).parent / "gamma_untagged_event.json").read_text())
