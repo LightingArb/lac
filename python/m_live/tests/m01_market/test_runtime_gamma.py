@@ -14,7 +14,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from h_shared.h_db import h_connect
 from h_shared.h_ip_pool import ContractError, HttpPolicy, IPPool
 from m_live.src.m01_market import runtime_gamma_full as full
 from m_live.src.m01_market import runtime_gamma_recent as recent
@@ -63,11 +62,10 @@ def test_real_identity_and_invalid_array(parse):
 
 
 @pytest.fixture
-def database(monkeypatch):
-    with h_connect() as connection, connection.transaction(force_rollback=True):
-        monkeypatch.setattr(full, "h_connect", lambda: nullcontext(connection))
-        monkeypatch.setattr(recent, "h_connect", lambda: nullcontext(connection))
-        yield connection
+def database(monkeypatch, empty_database):
+    monkeypatch.setattr(full, "h_connect", lambda: nullcontext(empty_database))
+    monkeypatch.setattr(recent, "h_connect", lambda: nullcontext(empty_database))
+    yield empty_database
 
 
 @pytest.mark.parametrize("writer", [full.c02_publish, recent.c04_publish])
@@ -145,15 +143,21 @@ def test_full_sweep_preserves_new_recent_rows_and_retires_missing(database):
 
 
 def test_full_publish_allows_downstream_foreign_key_reads(database):
-    # A real downstream FK check takes KEY SHARE; metadata updates must coexist.
-    with h_connect() as reader:
-        row = reader.execute(
-            "SELECT market_id FROM m_live.m01_market WHERE in_current_scan ORDER BY market_id LIMIT 1 FOR KEY SHARE"
-        ).fetchone()
-        if row is None:
-            pytest.skip("Run the local crawler once to exercise existing FK readers")
-        database.execute("SET LOCAL lock_timeout='200ms'")
-        full.c02_publish([], [], [], 100, datetime(1900, 1, 1, tzinfo=UTC))
+    # Own fixture rows and the downstream FK live entirely in this rollback.
+    event = full.s01_event(EVENT, NOW)
+    market, outcomes = full.s02_market(EVENT["markets"][2], EVENT["id"], 2, NOW)
+    full.c02_publish([event], [market], outcomes, 100)
+    database.execute(
+        """INSERT INTO m_live.m01_demand_market (market_id,refresh_seconds,book_levels)
+        VALUES (%s,10,0) ON CONFLICT (market_id) DO UPDATE SET refresh_seconds=10""",
+        (market[0],),
+    )
+    full.c02_publish([event], [market], outcomes, 100, datetime(1900, 1, 1, tzinfo=UTC))
+    assert database.execute(
+        """SELECT m.market_id FROM m_live.m01_demand_market d
+        JOIN m_live.m01_market m USING(market_id) WHERE m.market_id=%s""",
+        (market[0],),
+    ).fetchone() == (market[0],)
 
 
 def test_cold_bounds_and_follow_rotation(monkeypatch):

@@ -100,6 +100,7 @@ def all_runtime() -> None:
                 max_response_bytes=64 * 1024 * 1024,
                 request_items=250,
                 max_markets=50000,
+                max_pending_writes=8,
             )
         )
     h_wait(processes)
