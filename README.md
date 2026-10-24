@@ -125,7 +125,7 @@ uv run --env-file ../.env python -m m_live.all_runtime
 
 四個對外請求 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的額外 IP（JSON array）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。額外 IP 必須存在於本機網卡，否則服務啟動失敗；額外 IP 的請求會綁定來源位址。每個 IP 的 clob 最多 16 個在途請求，book、recent、full 各最多 4 個，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該 IP 的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
 
-**歷史價格（另一個資料終端機）。** `runtime_history` 常駐補最近 7 個完整 UTC 日，每市場每天保存第一個結果的分鐘價格；昨天在 00:10 UTC 後才抓，最舊的天優先。有列就不重抓、不覆蓋。
+**歷史價格（另一個資料終端機）。** `runtime_history` 常駐補最近 7 個完整 UTC 日，且不早於入口的 `first_day=2026-10-23`。每市場每天保存第一個結果的分鐘價格；昨天在 00:10 UTC 後才抓，最舊的天優先。Normal 只處理沒有列的 pending；成功、空日與 error 都不會自動重抓，範圍外既有列永久保留。
 
 ```bash
 cd python
@@ -134,7 +134,21 @@ uv run --env-file ../.env python -m m_historical.all_runtime
 
 可加 `--once` 執行至目前待處理工作完成後結束；仍有 pending 時會立即續輪。每輪最多 10,000 個市場日，沒有待抓工作時休息 60 秒；中斷後直接重啟，依資料庫重新挑未抓的市場日。SIGTERM／Ctrl+C 會完成當輪再退出。
 
-歷史與 m_live 共用主機預設出口及 `OUTBOUND_IPS`，每 IP 在途 16，Data API `/v2/prices-history` 每 10 秒最多 200 次。每輪重用一條 autocommit 連線，HTTP 與寫入分開，待寫入最多 8 批（含正在寫的一批）；單市場錯誤記 log 並留待下輪，權限與限流沿用共用排程規則。
+歷史與 m_live 共用主機預設出口及 `OUTBOUND_IPS`，每 IP 在途 16，Data API `/v2/prices-history` 每 10 秒最多 200 次。每輪重用一條 autocommit 連線，HTTP 與寫入分開，待寫入最多 8 批（含正在寫的一批）。請求在共用層重試用完後仍失敗，或回應不合法，就寫入 error；401／403 與限流沿用共用排程規則，pending 不寫 error。
+
+**歷史錯誤維護。** 由操作人員先停止 Normal，再執行 `uv run --env-file ../.env python -m m_historical.all_runtime --errors-only`。模式啟動時用 PostgreSQL `WITH HOLD` cursor 凍結目前日期及市場範圍的 error identity，以每批最多 10,000 筆讀取；沒有跨 HTTP 的 transaction，也不建立工作表。每筆只處理一次，沿用 Normal 的取得、解析與寫入流程；成功覆寫為 success／no_data，失敗保留 error 並將累計失敗次數加 1。遇到 401／403／限流時，本次維護以非零碼結束，未完成的 error 保持原狀。兩種模式的入口全程持有同一個 advisory lock，重疊啟動會拒絕；完成維護後由操作人員啟動 Normal。
+
+**WSL 背景歷史服務。** 服務設定在 [m_historical/deploy](python/m_historical/deploy/)，使用 `/home/admin/web/python` 與根目錄 `.env`。以 `systemctl --user enable --now lac_data-m-historical.service` 啟用，`loginctl enable-linger admin` 讓 user manager 在無登入時也能執行。服務不自動重啟；`systemctl --user stop` 等當輪完成後退出。關閉終端機後會繼續跑，但 Windows／WSL 必須維持運行，VPN 必須可用；enable 會在 WSL 啟動時帶起服務，不會自行啟動 Windows 或 WSL。
+
+歷史服務常用指令（在 WSL；更新程式需先停止，更新與 setup 成功後再啟動）：
+
+```bash
+systemctl --user status lac_data-m-historical.service
+journalctl --user -u lac_data-m-historical.service -f --all
+systemctl --user stop lac_data-m-historical.service
+systemctl --user start lac_data-m-historical.service
+systemctl --user restart lac_data-m-historical.service
+```
 
 
 ### 6. 啟動網站（終端機二）
@@ -160,7 +174,8 @@ psql "postgresql://admin:admin@127.0.0.1:5432/lac_data" -c \
           (SELECT count(*) FROM m_live.m02_clob_price) AS prices,
           (SELECT count(*) FROM m_live.m03_clob_book) AS books,
           (SELECT count(*) FROM m_historical.m01_price_day) AS history_days,
-          (SELECT count(*) FROM m_historical.m01_price_day WHERE prices IS NULL) AS history_empty_days;"
+          (SELECT count(*) FROM m_historical.m01_price_day WHERE status = 'no_data') AS history_empty_days,
+          (SELECT count(*) FROM m_historical.m01_price_day WHERE status = 'error') AS history_error_days;"
 ```
 
 這些數字確認表內已有發布資料；歷史缺列代表尚未成功抓取，有列但 prices 為 null 代表該日沒有可存的分鐘點。數量不代表涵蓋完整或報價新鮮度，請同時查看 requested_at、來源時間與執行紀錄。前端 Live 接線狀態見上方。
@@ -342,14 +357,18 @@ flowchart LR
 | asset_id | text | 第一個結果的 asset |
 | day | date | UTC 日期 |
 | prices | numeric[]? | 恰好 1,440 格，第 1 格是 00:00；缺分鐘為 null，無可存分鐘時整欄 null |
+| status | text | success（有分鐘點）、no_data（沒有可存分鐘點）、error；沒列是 pending |
+| error_reason | text? | 最新失敗原因；只在 error 有值 |
+| error_http_status | integer? | 最新失敗的 provider HTTP 狀態碼，沒有收到則 null；非法 HTTP 200 回應記 200 |
+| error_count | integer | 累計失敗的取得次數；單次取得內的 HTTP 重試不另加，成功後保留累計 |
 | requested_at | timestamptz | 送出請求前的 UTC 時間 |
 | m_historical_updated_at | timestamptz | 實際發布時間 |
 
-選取條件：created_at 早於該日結束，且尚未關閉或 closed_time 晚於該日開始；已關閉但 closed_time 不明的不抓。只處理恰好兩個結果且都有 asset 的市場。範圍是今天往前 7 個完整 UTC 日；00:10 前略過昨天，不把最舊日延伸成第 8 天。排序為 day、market_id，已有列的不再選取。
+選取條件：created_at 早於該日結束，且尚未關閉或 closed_time 晚於該日開始；已關閉但 closed_time 不明的不抓。只處理恰好兩個結果且都有 asset 的市場。範圍是今天往前 7 個完整 UTC 日與 `day >= first_day` 的交集；00:10 前略過昨天，不把最舊日延伸成第 8 天。排序為 day、market_id；Normal 不選已有列，errors-only 只選啟動時範圍內的 error。
 
 每市場日一個公開 GET /v2/prices-history：token_id、start、end、bucket_seconds=60、limit=10000；若需要翻頁則視為該市場日回應不合法。只保留當日半開區間 [00:00, 隔日 00:00) 的 resolution_seconds=60 點，排除 resolution_seconds=0 尾點，同分鐘取 timestamp 較新的點。
 
-插入使用 `ON CONFLICT (market_id, day) DO NOTHING`。成功空日也寫一列；請求或解析失敗不寫列並記錄錯誤，下輪仍可挑到。資料有列不代表 1,440 分鐘都有觀測；API 本身可能稀疏。每個結果一天最多 1,440 個可存分鐘，沒有補值、插值或尾點替換。
+Normal 插入使用 `ON CONFLICT (market_id, day) DO NOTHING`。只有 success 的 prices 有值；no_data 與 error 都是整欄 null，必須由 status 區分。error 的 requested_at 是該次取得開始時間，m_historical_updated_at 是寫入時間。errors-only 只可覆寫仍為 error 的列；success 與 no_data 不覆寫。資料有列不代表 1,440 分鐘都有觀測；API 本身可能稀疏。每個結果一天最多 1,440 個可存分鐘，沒有補值、插值或尾點替換。
 
 
 **Live 畫面目前的讀法（範例網站）：**
@@ -697,7 +716,7 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 | from       | 否   | 查詢開始時間，UTC、ISO-8601；省略時不限制開始時間 |
 | to         | 否   | 查詢結束時間，UTC、ISO-8601；省略時不限制結束時間 |
 
-此歷史 HTTP 介面尚未實作，回傳格式需在 m_api 施工前依 §4 的每日陣列表定案。來源只有 `m_historical.m01_price_day`，不另有 coverage 表；未抓的市場日沒有列，成功空日有列且 prices 為 null。讀取端需保留這個差別，展開分鐘時忽略 null 格，不補點；第二個結果的價格是推導值。
+此歷史 HTTP 介面尚未實作，回傳格式需在 m_api 施工前依 §4 的每日陣列表定案。來源只有 `m_historical.m01_price_day`，不另有 coverage 表；未抓的市場日沒有列，已抓的必須區分 success／no_data／error，不能把 prices 為 null 都當成成功空日。展開 success 分鐘時忽略 null 格，不補點；第二個結果的價格是推導值。
 
 
 ### GET /signals?product=&event_id=&cursor=&limit=

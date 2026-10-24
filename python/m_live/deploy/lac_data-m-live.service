@@ -1,0 +1,16 @@
+[Unit]
+Description=LAC live market data collection
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/web/python
+EnvironmentFile=/home/admin/web/.env
+ExecStart=/home/admin/web/python/.venv/bin/python -m m_live.all_runtime
+Restart=no
+KillMode=mixed
+TimeoutStopSec=infinity
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
