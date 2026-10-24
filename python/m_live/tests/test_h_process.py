@@ -333,3 +333,33 @@ def test_crash_stops_service_after_sibling_finishes():
         h_wait([slow, crash])
     assert caught.value.code == 1 and finished.is_set()
     assert not slow.process.is_alive()
+
+
+def test_ip_map_slow_request_does_not_hold_completed_requests():
+    client = pool(inflight=2)
+    first_started, release_first, third_started = (
+        threading.Event(),
+        threading.Event(),
+        threading.Event(),
+    )
+
+    def fetch(item):
+        if item == 0:
+            first_started.set()
+            assert release_first.wait(5)
+        else:
+            assert first_started.wait(2)
+            if item == 2:
+                third_started.set()
+        return item
+
+    with ThreadPoolExecutor(max_workers=1) as consumer:
+        result = consumer.submit(lambda: list(client.map(fetch, range(10))))
+        try:
+            assert third_started.wait(2), (
+                "A completed slot must refill before the slow first request"
+            )
+        finally:
+            release_first.set()
+        assert sorted(result.result(timeout=5)) == list(range(10))
+    client.close()

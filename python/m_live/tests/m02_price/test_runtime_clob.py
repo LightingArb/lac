@@ -169,6 +169,7 @@ def test_round_cap_pending_and_retired_price_deletion(database, monkeypatch):
 
 def test_publication_rechecks_demand_identity_and_source_time(database):
     row = ("r4-test-a", "r4-test-a-0", Decimal("0.3"), Decimal("0.7"), NOW)
+    before = database.execute("SELECT clock_timestamp()").fetchone()[0]
     assert clob.s06_publish(database, [row]) == (1, 1, 1)
     older = row[:2] + (Decimal("0.2"), Decimal("0.8"), NOW - timedelta(seconds=1))
     assert clob.s06_publish(database, [older]) == (0, 0, 0)
@@ -177,7 +178,9 @@ def test_publication_rechecks_demand_identity_and_source_time(database):
         WHERE market_id='r4-test-a'"""
     ).fetchone()
     assert stored[0:2] == (Decimal("0.3"), NOW)
-    assert stored[2] is not None  # Host wall time can step backwards; never fabricate it.
+    after = database.execute("SELECT clock_timestamp()").fetchone()[0]
+    # Bound publication by DB clock readings, including an observed backward step.
+    assert min(before, after) <= stored[2] <= max(before, after)
     assert clob.s06_publish(database, [(row[0], "wrong-asset", *row[2:])]) == (0, 0, 0)
     database.execute("DELETE FROM m_live.m01_demand_market WHERE market_id='r4-test-a'")
     assert clob.s06_publish(database, [row]) == (0, 0, 0)

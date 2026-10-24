@@ -290,6 +290,8 @@ class IPPool:
                 self.release(index)
 
     def map(self, function, items):
+        from concurrent.futures import FIRST_COMPLETED, wait
+
         workers = len(self.addresses) * self.ip_inflight
         iterator = iter(items)
 
@@ -301,13 +303,16 @@ class IPPool:
                 raise
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            pending = deque(executor.submit(call, item) for item in islice(iterator, workers))
+            pending = {executor.submit(call, item) for item in islice(iterator, workers)}
             try:
                 while pending:
-                    result = pending.popleft().result()
-                    for item in islice(iterator, 1):
-                        pending.append(executor.submit(call, item))
-                    yield result
+                    done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        pending.remove(future)
+                        result = future.result()
+                        for item in islice(iterator, 1):
+                            pending.add(executor.submit(call, item))
+                        yield result
             finally:
                 for future in pending:
                     future.cancel()
