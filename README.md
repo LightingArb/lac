@@ -102,7 +102,7 @@ uv run --env-file ../.env python -m m_historical.all_setup
 看到這兩行就成功：
 
 ```text
-SETUP_OK m_live tables=4
+SETUP_OK m_live tables=6
 SETUP_OK m_historical tables=2
 ```
 
@@ -115,15 +115,15 @@ cd python
 uv run --env-file ../.env python -m m_live.all_runtime
 ```
 
-- 會開四個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 每 600 秒抓最新報價。一輪超過週期時，完成後立即開始下一輪。
-- 空資料庫第一次：市場資料發布後 clob 才有標的；第一批價格可能要等到 clob 的下一輪。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
+- 會開五個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 抓到期報價、`book` 抓到期掛單簿。後兩者有 pending 就立即續跑，完成後休息 0.5 秒；預設掛單簿間隔 300 秒。
+- 空資料庫第一次：市場與需求資料發布後 clob、book 才有標的；第一批價格與掛單簿在各自下一輪開始取得。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
 - 輸出是一行一個 JSON。`round_finished` 的 `result` 是 `complete` 才算成功。
-- 只跑一輪就結束：加 `--once`。只跑其中一個：加 `--unit recent`、`--unit full`、`--unit demand` 或 `--unit clob`。
+- 只跑一輪就結束：加 `--once`。只跑其中一個：加 `--unit recent`、`--unit full`、`--unit demand` 、`--unit clob` 或 `--unit book`。
 - 停止：`Ctrl+C`，會等目前的工作做完再結束。
 
 排程與 HTTP 設定在各模組的 `all_runtime.py`，每個 `h_process` 呼叫對應一個 runtime。`period_s` 從每輪開始起算；`rest_s`／`rest_ms` 從每輪結束起算，三者只能選一個。`not_updated` 在這兩種模式依宣告的週期／休息時間等待；`pending` 立即續跑。一般失敗等待依序為基準的 1、2、4、8 倍，成功後恢復；401／403 只暫停該 runtime 到重啟，期間持續記錯誤。
 
-三個 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的額外 IP（JSON array）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。額外 IP 必須存在於本機網卡，否則服務啟動失敗；額外 IP 的請求會綁定來源位址。每個 IP 最多 4 個在途請求，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該 IP 的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
+四個對外請求 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的額外 IP（JSON array）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。額外 IP 必須存在於本機網卡，否則服務啟動失敗；額外 IP 的請求會綁定來源位址。每個 IP 的 clob 最多 16 個在途請求，book、recent、full 各最多 4 個，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該 IP 的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
 
 **選用：歷史價格（走勢圖用）。** 歷史是手動跑的單次工作，不會跟著上面的程式自動更新。預設抓 24 小時成交量前 500 個進行中議題的全部結果，固定抓最近 3 天：
 
@@ -159,7 +159,8 @@ npm run dev
 ```bash
 psql "postgresql://admin:admin@127.0.0.1:5432/lac_data" -c \
   "SELECT (SELECT count(*) FROM m_live.m01_event) AS events,
-          (SELECT count(*) FROM m_live.m02_clob_price) AS prices;"
+          (SELECT count(*) FROM m_live.m02_clob_price) AS prices,
+          (SELECT count(*) FROM m_live.m03_clob_book) AS books;"
 ```
 
 這兩個數字用來確認資料程式有寫入；前端 Live 接線狀態見上方。
@@ -312,7 +313,26 @@ flowchart LR
 
 `runtime_clob` 每輪優先選沒有價格列的市場，其次按 `requested_at + refresh_seconds` 最早到期排序，market_id 打破同時間的平手；最多 50,000 個。一個 `POST /prices` 請求包含 250 個市場第一個結果的 BUY／SELL，實測 BUY 對應 bid、SELL 對應 ask；API 的 bid=0、ask=1 空邊界值記為 null。每批回應立即發布，發布前重讀需求與第一結果 identity，較舊的請求不覆寫較新的列。不在需求表的市場刪除價格列；仍在需求表的舊價格保留原 requested_at，由讀取端判斷能否使用。
 
-所有請求經 IP 池，每 IP 在途 4、`/prices` 500 次／10 秒；還有到期的市場就回報 pending 立即再跑，完成後休息 0.5 秒。
+所有請求經 IP 池，每 IP 在途 16、`/prices` 500 次／10 秒；還有到期的市場就回報 pending 立即再跑，完成後休息 0.5 秒。
+
+**`m_live.m03_clob_book`**：一列＝一個市場第一個結果的最新整本掛單簿；主鍵 `market_id`，參照 `m01_market`。
+
+| 欄位 | 型別 | 意思 |
+| --- | --- | --- |
+| market_id | text | 市場編號、主鍵與外鍵 |
+| asset_id | text | outcome_index=0 的第一個結果之 asset |
+| bids、asks | jsonb? | 每檔為兩個 JSON 數字 `[價格, 數量]`；買單價格由高至低、賣單由低至高；價格 0～1、數量 >0 |
+| source_timestamp | timestamptz? | Polymarket timestamp（epoch 毫秒）轉為 UTC，保留來源時間 |
+| source_hash | text? | Polymarket 原始 hash；不作內部比對或防重複 |
+| tick_size、min_order_size | numeric? | 來源價格最小跳動與最小下單量，保留精確數值 |
+| requested_at | timestamptz | 該批送出請求前的時間，到期計算基準 |
+| m_live_updated_at | timestamptz | 該列寫入時間 |
+
+只抓需求表中恰好兩個結果、都有 asset 的市場，保留全部價層。合法空邊為 `[]`；provider 沒回 token 時 bids、asks 與來源 metadata 都是 SQL null，與空簿區分。錯誤的價層、重複 requested token 或不合法 metadata 使該批失敗，不發布可疑資料；未要求的 token 忽略。第二個結果的買單可用第一個的賣單價格做 `1 - price`、數量相同推導，賣單同理；這是鏡像推導，非第二本獨立 snapshot（實測完整深度有少數差異）。價格表仍由 `/prices` 獨立更新。
+
+`runtime_book` 優先選沒有列的市場，其次按到期時間、market_id 排序。`book_levels=0` 用入口的 `book_seconds=300` 秒；`book_levels>0` 或 null 用需求表 `refresh_seconds`，但都抓整本。每輪最多 50,000 市場、每個 `POST /books` 最多 500 個 token；每 IP 在途 4、500 次／10 秒。每輪重用一條寫入連線，HTTP 與寫入分開，待寫入最多 8 批（含正在寫的一批），額外抓取受 IP 池在途上限約束。
+
+每批寫入重新確認需求及第一結果 identity，舊 requested_at 不蓋新列；每輪先刪除需求外的掛單簿。還有到期市場回 pending，完成後休息 0.5 秒。requested_at 與來源 timestamp 不相互替代；資料可用性與新鮮度由讀取端判斷。
 
 **`m_historical.m01_polymarket_price`**：一列＝一個結果在一分鐘的價格；主鍵 `asset_id`＋`minute_at`。走勢圖用。
 
@@ -885,10 +905,12 @@ npm run build     # TypeScript 檢查與正式輸出 dist/
 ```bash
 # 資料程式：從 repository 根目錄開始
 cd python
-uv run pytest
+uv run --env-file ../.env pytest
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+資料庫測試只在本機執行：在 rollback transaction 內清空六張 m_live 表並自建資料，結束後還原 transaction；測試期間會短暫鎖住 m_live。正式機不對正式資料庫跑測試。
 
 前端的元件、路由與檔案導覽見 [typescript/web_page_demo/README.md](typescript/web_page_demo/README.md)。
 

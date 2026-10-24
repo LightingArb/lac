@@ -195,3 +195,19 @@ def test_scan_cap_publishes_available_records_and_warns(monkeypatch, capsys):
     assert calls[0]["version"] == ["v1", "v2"]
     assert '"event": "scan_capped"' in capsys.readouterr().out
     client.close()
+
+
+@pytest.mark.parametrize("writer,module", [(full.c02_publish, full), (recent.c04_publish, recent)])
+def test_market_publication_uses_no_key_update_lock(monkeypatch, writer, module):
+    connection = MagicMock()
+    connection.execute.return_value.fetchall.return_value = []
+    monkeypatch.setattr(module, "h_connect", lambda: nullcontext(connection))
+    event = full.s01_event(EVENT, NOW)
+    market, outcomes = full.s02_market(EVENT["markets"][2], EVENT["id"], 2, NOW)
+    writer([event], [market], outcomes, 100)
+    statements = [
+        " ".join(call.args[0].split()).upper() for call in connection.execute.call_args_list
+    ]
+    locks = [sql for sql in statements if "FROM M_LIVE.M01_MARKET" in sql and "FOR " in sql]
+    assert locks
+    assert all("FOR NO KEY UPDATE" in sql and "FOR UPDATE" not in sql for sql in locks)

@@ -1,0 +1,175 @@
+{
+  "source": "R6 POST https://clob.polymarket.com/books",
+  "raw_path": "/home/admin/research/web/book_scan/r6_collect.jsonl.gz",
+  "index": "random:0",
+  "requested_at": "2026-10-24T09:42:55.714059+00:00",
+  "body_sha256": "39b3d251910222c3f4a7b3d3a414e5ba20dcdf20c4dae5d65b20514cca77797d",
+  "books": [
+    {
+      "market": "0x39c86183b249f7782d9cae549937e59368b192cfe1210b66b484bd924631ab62",
+      "asset_id": "110922648998110966397596923405200036012948902893548961421013205951388976234445",
+      "timestamp": "1792834962741",
+      "hash": "5ef38bf1951c102cd8a1c41e474988333c6c2bec",
+      "bids": [
+        {
+          "price": "0.01",
+          "size": "35715.45"
+        },
+        {
+          "price": "0.02",
+          "size": "1572.78"
+        },
+        {
+          "price": "0.03",
+          "size": "12845.66"
+        },
+        {
+          "price": "0.04",
+          "size": "305.61"
+        },
+        {
+          "price": "0.05",
+          "size": "450"
+        },
+        {
+          "price": "0.06",
+          "size": "150"
+        },
+        {
+          "price": "0.07",
+          "size": "150"
+        },
+        {
+          "price": "0.08",
+          "size": "250"
+        },
+        {
+          "price": "0.1",
+          "size": "100"
+        },
+        {
+          "price": "0.11",
+          "size": "46"
+        },
+        {
+          "price": "0.12",
+          "size": "5"
+        }
+      ],
+      "asks": [
+        {
+          "price": "0.99",
+          "size": "635.68"
+        },
+        {
+          "price": "0.98",
+          "size": "1517.58"
+        },
+        {
+          "price": "0.97",
+          "size": "300"
+        },
+        {
+          "price": "0.96",
+          "size": "12.02"
+        },
+        {
+          "price": "0.86",
+          "size": "71.42"
+        },
+        {
+          "price": "0.85",
+          "size": "7.87"
+        },
+        {
+          "price": "0.66",
+          "size": "953.66"
+        },
+        {
+          "price": "0.65",
+          "size": "1571.86"
+        },
+        {
+          "price": "0.55",
+          "size": "864.65"
+        },
+        {
+          "price": "0.54",
+          "size": "1435.18"
+        },
+        {
+          "price": "0.46",
+          "size": "250"
+        },
+        {
+          "price": "0.45",
+          "size": "1332"
+        },
+        {
+          "price": "0.31",
+          "size": "125"
+        },
+        {
+          "price": "0.25",
+          "size": "350"
+        },
+        {
+          "price": "0.24",
+          "size": "175"
+        },
+        {
+          "price": "0.23",
+          "size": "10"
+        },
+        {
+          "price": "0.22",
+          "size": "24.35"
+        },
+        {
+          "price": "0.21",
+          "size": "50"
+        },
+        {
+          "price": "0.2",
+          "size": "31"
+        },
+        {
+          "price": "0.19",
+          "size": "511"
+        },
+        {
+          "price": "0.18",
+          "size": "150"
+        },
+        {
+          "price": "0.17",
+          "size": "650"
+        },
+        {
+          "price": "0.16",
+          "size": "150"
+        },
+        {
+          "price": "0.15",
+          "size": "36"
+        }
+      ],
+      "min_order_size": "5",
+      "tick_size": "0.01",
+      "neg_risk": true,
+      "last_trade_price": ""
+    },
+    {
+      "market": "0x396581692cafc1b41f0af5f6a8ac58a440b01bcf0081f96d647259c69e97ad2a",
+      "asset_id": "99341441229659295323202703325282946738368351111203659214137685185158337698292",
+      "timestamp": "1787683509664",
+      "hash": "3eed627a747aa79be15abca667e587bf3da4c64b",
+      "bids": [],
+      "asks": [],
+      "min_order_size": "5",
+      "tick_size": "0.01",
+      "neg_risk": false,
+      "last_trade_price": ""
+    }
+  ]
+}

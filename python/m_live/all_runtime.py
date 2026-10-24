@@ -6,13 +6,14 @@ from m_live.src.m01_market.runtime_demand import runtime_demand
 from m_live.src.m01_market.runtime_gamma_full import runtime_gamma_full
 from m_live.src.m01_market.runtime_gamma_recent import runtime_gamma_recent
 from m_live.src.m02_price.runtime_clob import runtime_clob
+from m_live.src.m03_book.runtime_book import runtime_book
 
 
 def all_runtime() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     parser.add_argument(
-        "--unit", choices=("recent", "full", "demand", "clob", "all"), default="all"
+        "--unit", choices=("recent", "full", "demand", "clob", "book", "all"), default="all"
     )
     args = parser.parse_args()
     OUTBOUND_IPS = h_outbound_ips()
@@ -90,7 +91,7 @@ def all_runtime() -> None:
                 once=args.once,
                 rest_ms=500,
                 ips=OUTBOUND_IPS,
-                ip_inflight=4,
+                ip_inflight=16,
                 ip_limit={"/prices": (500, 10)},
                 timeout=30,
                 retries=2,
@@ -101,6 +102,27 @@ def all_runtime() -> None:
                 request_items=250,
                 max_markets=50000,
                 max_pending_writes=8,
+            )
+        )
+    if args.unit in ("book", "all"):
+        processes.append(
+            h_process(
+                runtime_book,
+                once=args.once,
+                rest_ms=500,
+                ips=OUTBOUND_IPS,
+                ip_inflight=4,
+                ip_limit={"/books": (500, 10)},
+                timeout=30,
+                retries=2,
+                rate_wait=60,
+                backoff_max=8,
+                auth_log_s=60,
+                max_response_bytes=64 * 1024 * 1024,
+                request_items=500,
+                max_markets=50000,
+                max_pending_writes=8,
+                book_seconds=300,
             )
         )
     h_wait(processes)
