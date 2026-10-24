@@ -395,7 +395,6 @@ def c04_publish(
     markets: list[tuple],
     outcomes: list[tuple],
     batch: int,
-    scan_started: datetime | None = None,
 ) -> int:
     """Publish metadata and outcomes atomically; source time guards both writers."""
     events = sorted(events, key=lambda r: r[0])
@@ -406,12 +405,11 @@ def c04_publish(
     markets = [r[:24] + (published,) + r[25:] for r in markets]
     with h_connect() as connection:
         # Both writers acquire existing rows in the same event -> market order.
-        # The full sweep also locks rows whose membership may be withdrawn.
         connection.execute(
             """SELECT event_id FROM m_live.m01_event
-            WHERE event_id = ANY(%s) OR (%s AND in_current_scan)
+            WHERE event_id = ANY(%s)
             ORDER BY event_id FOR NO KEY UPDATE""",
-            (event_ids, scan_started is not None),
+            (event_ids,),
         ).close()
         h_upsert(
             connection,
@@ -432,17 +430,11 @@ def c04_publish(
             events,
             batch,
         )
-        if scan_started is not None:
-            connection.execute(
-                """UPDATE m_live.m01_event SET in_current_scan=false, m_live_updated_at=%s
-                WHERE in_current_scan AND NOT (event_id=ANY(%s)) AND m_live_updated_at < %s""",
-                (published, event_ids, scan_started),
-            )
         connection.execute(
             """SELECT market_id FROM m_live.m01_market
-            WHERE market_id=ANY(%s) OR (%s AND in_current_scan)
+            WHERE market_id=ANY(%s)
             ORDER BY market_id FOR NO KEY UPDATE""",
-            (market_ids, scan_started is not None),
+            (market_ids,),
         ).close()
         accepted = set()
         for start in range(0, len(markets), batch):
@@ -476,12 +468,6 @@ def c04_publish(
                 RETURNING market_id""",
                     [v for row in rows for v in row],
                 )
-            )
-        if scan_started is not None:
-            connection.execute(
-                """UPDATE m_live.m01_market SET in_current_scan=false, m_live_updated_at=%s
-                WHERE in_current_scan AND NOT (market_id=ANY(%s)) AND m_live_updated_at < %s""",
-                (published, market_ids, scan_started),
             )
         # Market locks and RETURNING prevent a stale response from changing outcomes.
         h_upsert(

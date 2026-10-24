@@ -24,7 +24,7 @@ def pool(*, ips=(), inflight=2, limits=None, retries=2, size=10000):
         "test_runtime",
         list(ips),
         inflight,
-        limits or {"/prices": (100, 1), "/midpoints": (100, 1)},
+        limits or {"/prices": (100, 1), "/books": (100, 1)},
         HttpPolicy(1, retries, 1, size),
     )
 
@@ -80,13 +80,13 @@ def test_ip_inflight_and_default_then_extra(monkeypatch):
 
 
 def test_endpoint_windows_and_keyset_share_listing_quota(monkeypatch):
-    client = pool(limits={"/events": (1, 0.15), "/midpoints": (1, 0.15)})
+    client = pool(limits={"/events": (1, 0.15), "/books": (1, 0.15)})
     calls = []
     transport(
         monkeypatch, client, lambda i, m, u, k: calls.append((u, time.monotonic())) or Response()
     )
     client.request("GET", "https://test/events")
-    client.request("GET", "https://test/midpoints")
+    client.request("GET", "https://test/books")
     client.request("GET", "https://test/events/keyset")
     assert calls[1][1] - calls[0][1] < 0.1
     assert calls[2][1] - calls[0][1] >= 0.14
@@ -105,11 +105,11 @@ def test_single_ip_429_only_cools_that_endpoint(monkeypatch):
 
     transport(monkeypatch, client, request)
     assert client.request("GET", "https://test/prices")["value"] == 0.5
-    client.request("GET", "https://test/midpoints")
+    client.request("GET", "https://test/books")
     assert calls == [
         (0, "https://test/prices"),
         (1, "https://test/prices"),
-        (0, "https://test/midpoints"),
+        (0, "https://test/books"),
     ]
 
 
@@ -123,7 +123,7 @@ def test_all_ips_429_reports_wait_other_endpoint_still_works(monkeypatch):
     with pytest.raises(ProviderError) as caught:
         client.request("GET", "https://test/prices")
     assert caught.value.status == 429 and 0 < caught.value.wait <= 1
-    client.request("GET", "https://test/midpoints")
+    client.request("GET", "https://test/books")
 
 
 @pytest.mark.parametrize("status,expected", [(500, 3), (401, 1), (403, 1), (400, 1)])

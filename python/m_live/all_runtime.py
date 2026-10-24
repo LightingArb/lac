@@ -5,7 +5,7 @@ from h_shared.h_process import h_process, h_wait
 from m_live.src.m01_market.runtime_demand import runtime_demand
 from m_live.src.m01_market.runtime_gamma_full import runtime_gamma_full
 from m_live.src.m01_market.runtime_gamma_recent import runtime_gamma_recent
-from m_live.src.m02_clob.runtime_clob import runtime_clob
+from m_live.src.m02_price.runtime_clob import runtime_clob
 
 
 def all_runtime() -> None:
@@ -88,24 +88,18 @@ def all_runtime() -> None:
             h_process(
                 runtime_clob,
                 once=args.once,
-                period_s=600,
+                rest_ms=500,
                 ips=OUTBOUND_IPS,
                 ip_inflight=4,
-                # /last-trades-prices: 官方未列，照同類 endpoint 的額度。
-                ip_limit={
-                    "/prices": (500, 10),
-                    "/midpoints": (500, 10),
-                    "/last-trades-prices": (500, 10),
-                },
+                ip_limit={"/prices": (500, 10)},
                 timeout=30,
                 retries=2,
                 rate_wait=60,
                 backoff_max=8,
                 auth_log_s=60,
                 max_response_bytes=64 * 1024 * 1024,
-                request_items=500,
-                report_every=100,
-                write_batch=1000,
+                request_items=250,
+                max_markets=50000,
             )
         )
     h_wait(processes)

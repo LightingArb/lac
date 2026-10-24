@@ -203,7 +203,7 @@ flowchart LR
 │   │       │   ├── runtime_gamma_recent.py  # 新市場、關閉、未定案追蹤
 │   │       │   ├── runtime_gamma_full.py    # 完整議題掃描
 │   │       │   └── runtime_demand.py        # 合併產品需求
-│   │       └── m02_clob/runtime_clob.py     # demo 報價
+│   │       └── m02_price/runtime_clob.py    # 依需求到期時間抓最佳買賣價
 │   └── m_historical/          # 歷史分鐘價格（手動單次）
 └── typescript/
     └── web_page_demo/
@@ -218,7 +218,7 @@ flowchart LR
 ## 4｜資料表
 
 - 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
-- **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價仍是 demo 的每 600 秒全量抓取，尚未依需求表更新；歷史是一分鐘一筆，手動回補。
+- **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；歷史是一分鐘一筆，手動回補。
 - **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查。
 - **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描只撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。identity 與結算永久保留。
 - **結算：** resolution_status 原樣存 v1 的 umaResolutionStatus 或 v2 的 resolutionStatus；只有 resolved 才寫各 outcome 的 resolved_price，包含 0.5／0.5。closed 或 1／0 價格本身不代表定案。resolved_seen_at 是 Web 首次看到 resolved 的時間，只寫一次；這是 Gamma 回報的結算，沒有宣稱鏈上付款已驗證。
@@ -226,7 +226,7 @@ flowchart LR
 - **層級：** 議題（event）→ 市場（market，畫面上的一個選項列）→ 結果（outcome，例如 Yes 與 No，各有自己的 `asset_id` 與價格）。
 - **價格怎麼讀：**
   - 價格介於 0 到 1，畫面顯示成 ¢：0.86 就是 86¢，代表市場認為有 86% 的機率發生。結算時猜對的一邊每份拿回 1 美元。
-  - Chance 用 `midpoint`；倍數 = 1 ÷ `midpoint`。
+  - Chance 用買賣價算出的中間價 `midpoint = (best_bid + best_ask) / 2`；任一邊是 null，中間價與 Chance 也是 null。倍數 = 1 ÷ `midpoint`，中間價缺少或為 0 時不顯示倍數。
   - 「Buy Yes」「Buy No」按鈕用各自結果的 `best_ask`（立即買入價）；`best_bid` 是立即賣出價。
   - 沒有人掛單時 `best_bid`／`best_ask` 是 null，畫面顯示「—」。
 - **時間：** 全部是 UTC，畫面上再轉成使用者的時區。
@@ -298,15 +298,21 @@ flowchart LR
 
 產品清單在 `all_runtime.py`，目前為空。配置產品時，使用 `<PRODUCT>_DB_*` 唯讀該產品的 `m_live.m01_polymarket_demand`（condition_id、refresh_seconds、book_levels）；有要求時只在產品要求中取最短間隔、最大檔數（null 最大）。沒有要求時，議題 tags 含 slug=sports 用 60 秒，其他 10 秒，book_levels=0。某產品讀不到會記錯誤、其他產品照算；本輪需求以一個 transaction 替換，不在進行中範圍的市場移除。需求表是排程輸入，不代表已達到該新鮮度。
 
-**`m_live.m02_clob_price`**：一列＝一個結果的最新價格；主鍵 `asset_id`。
+**`m_live.m02_clob_price`**：一列＝一個市場第一個結果的最新最佳買賣價；主鍵 `market_id`，參照 `m01_market`。
 
-| 欄位                                                 | 型別            | 意思                                        |
-| ---------------------------------------------------- | --------------- | ------------------------------------------- |
-| asset_id                                             | text            | 哪一個結果                                  |
-| best_bid、best_ask                                   | numeric?        | 立即賣出、立即買入的價格；沒人掛單時是 null |
-| midpoint                                             | numeric?        | 中間價，畫面的 Chance                       |
-| last_trade_price、last_trade_side                    | numeric?、text? | 最近一筆成交價與方向（BUY／SELL）           |
-| quote_observed_at、mid_observed_at、last_observed_at | timestamptz?    | 資料程式抓到各個價格的時間，不是成交時間    |
+| 欄位 | 型別 | 意思 |
+| --- | --- | --- |
+| market_id | text | 市場編號、主鍵與外鍵 |
+| asset_id | text | outcome_index=0 的第一個結果之 asset |
+| best_bid、best_ask | numeric? | 第一個結果的最佳買價／賣價；沒有掛單的那一邊是 null |
+| requested_at | timestamptz | 該批請求送出前的時間，作為可得時間與到期計算基準 |
+| m_live_updated_at | timestamptz | 該列寫入時間 |
+
+只抓需求表中恰好兩個結果、兩個結果都有 asset 的市場。第二個結果的 `best_bid = 1 - 第一個 best_ask`、`best_ask = 1 - 第一個 best_bid`；被減的值是 null，對應結果也維持 null。中間價不存表，由讀取端以 `(best_bid + best_ask) / 2` 計算，缺任一邊時為 null。
+
+`runtime_clob` 每輪優先選沒有價格列的市場，其次按 `requested_at + refresh_seconds` 最早到期排序，market_id 打破同時間的平手；最多 50,000 個。一個 `POST /prices` 請求包含 250 個市場第一個結果的 BUY／SELL，實測 BUY 對應 bid、SELL 對應 ask；API 的 bid=0、ask=1 空邊界值記為 null。每批回應立即發布，發布前重讀需求與第一結果 identity，較舊的請求不覆寫較新的列。不在需求表的市場刪除價格列；仍在需求表的舊價格保留原 requested_at，由讀取端判斷能否使用。
+
+所有請求經 IP 池，每 IP 在途 4、`/prices` 500 次／10 秒；還有到期的市場就回報 pending 立即再跑，完成後休息 0.5 秒。
 
 **`m_historical.m01_polymarket_price`**：一列＝一個結果在一分鐘的價格；主鍵 `asset_id`＋`minute_at`。走勢圖用。
 
@@ -336,6 +342,8 @@ flowchart LR
 - 隱藏低流動性：隱藏 liquidity 小於 25,000 或未知的市場；被選中的訊號那一列一定保留。
 
 ## 5｜畫面
+
+Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint = (best_bid + best_ask) / 2`；任一邊沒有掛單時顯示「—」。
 
 範例網站就是畫面規格：`npm run dev` 打開後每一頁都可以點。參考網站：[polym.trade](https://polym.trade/)。
 
@@ -515,6 +523,8 @@ flowchart LR
 
 ### GET /events/{event_id}
 
+以下格式草稿的 `midpoint` 由 `m_api` 用 `(best_bid + best_ask) / 2` 計算；任一邊為 null 時 midpoint 為 null。
+
 | Path 參數 | 必填 | 意思          |
 | --------- | ---- | ------------- |
 | event_id  | 是   | §4 的議題編號 |
@@ -616,11 +626,8 @@ flowchart LR
               "best_bid": "0.41",
               "best_ask": "0.42",
               "midpoint": "0.415",
-              "last_trade_price": "0.42",
-              "last_trade_side": "BUY",
-              "quote_observed_at": "2026-10-21T12:00:00Z",
-              "mid_observed_at": "2026-10-21T12:00:00Z",
-              "last_observed_at": "2026-10-21T12:00:00Z"
+              "requested_at": "2026-10-21T12:00:00Z",
+              "m_live_updated_at": "2026-10-21T12:00:01Z"
             }
           },
           {
@@ -642,7 +649,7 @@ flowchart LR
 
 ### GET /prices?asset_ids=&cursor=&limit=
 
-回傳最新價格，每筆欄位見 §4 的 `m_live.m02_clob_price`。
+回傳最新價格，來源欄位見 §4 的 `m_live.m02_clob_price`。`midpoint` 由 `m_api` 用買賣價計算，不是資料表欄位；任一邊為 null 時回傳 null。查第二個結果的 asset_id 時，`m_api` 依 §4 的互補公式推導買賣價，沿用同一筆 requested_at。
 
 | Query 參數    | 必填 | 意思                                                                                        |
 | ------------- | ---- | ------------------------------------------------------------------------------------------- |
@@ -657,11 +664,8 @@ flowchart LR
       "best_bid": "0.41",
       "best_ask": "0.42",
       "midpoint": "0.415",
-      "last_trade_price": "0.42",
-      "last_trade_side": "BUY",
-      "quote_observed_at": "2026-10-21T12:00:00Z",
-      "mid_observed_at": "2026-10-21T12:00:00Z",
-      "last_observed_at": "2026-10-21T12:00:00Z"
+      "requested_at": "2026-10-21T12:00:00Z",
+      "m_live_updated_at": "2026-10-21T12:00:01Z"
     }
   ],
   "next_cursor": null

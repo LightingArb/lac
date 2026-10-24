@@ -1,0 +1,85 @@
+[
+  {
+    "source_file": "/home/admin/research/web/rest_scan/raw/side_semantics.jsonl.xz",
+    "record": 2,
+    "body_sha256": "c819aab765c9f80a9bea97968197f6a58b7956bd358a0b726bef3917b8242719",
+    "started_at": "2026-10-23T21:05:14.449355Z",
+    "url": "https://clob.polymarket.com/prices",
+    "payload": [
+      {
+        "token_id": "24305882594958651434412239232845758594343897358918109869056103614897662576151",
+        "side": "BUY"
+      },
+      {
+        "token_id": "24305882594958651434412239232845758594343897358918109869056103614897662576151",
+        "side": "SELL"
+      }
+    ],
+    "response": {
+      "24305882594958651434412239232845758594343897358918109869056103614897662576151": {
+        "BUY": "0.49",
+        "SELL": "0.51"
+      }
+    }
+  },
+  {
+    "source_file": "/home/admin/research/web/rest_scan/raw/side_semantics.jsonl.xz",
+    "record": 4,
+    "body_sha256": "6f9a1eed4665265719b6d40a4a59f0afaa04cf98bd2c15521b20bc39781e6e81",
+    "started_at": "2026-10-23T21:05:14.794310Z",
+    "url": "https://clob.polymarket.com/prices",
+    "payload": [
+      {
+        "token_id": "85959763367560480456609416335583096232160918791320647479608679055394451775291",
+        "side": "BUY"
+      },
+      {
+        "token_id": "85959763367560480456609416335583096232160918791320647479608679055394451775291",
+        "side": "SELL"
+      }
+    ],
+    "response": {
+      "85959763367560480456609416335583096232160918791320647479608679055394451775291": {
+        "BUY": "0.5",
+        "SELL": "0.51"
+      }
+    }
+  },
+  {
+    "source_file": "/home/admin/research/web/rest_scan/raw/side_semantics.jsonl.xz",
+    "record": 6,
+    "body_sha256": "f9418e53f2ad594a8ab1544173182f5b1b9cb0314baaac1f090607d41e8c539b",
+    "started_at": "2026-10-23T21:05:15.143256Z",
+    "url": "https://clob.polymarket.com/prices",
+    "payload": [
+      {
+        "token_id": "65320310033633822106477870290047858716258102230101411519847668513024903684811",
+        "side": "BUY"
+      },
+      {
+        "token_id": "65320310033633822106477870290047858716258102230101411519847668513024903684811",
+        "side": "SELL"
+      }
+    ],
+    "response": {
+      "65320310033633822106477870290047858716258102230101411519847668513024903684811": {
+        "BUY": "0.49",
+        "SELL": "0.51"
+      }
+    }
+  },
+  {
+    "source_file": "/home/admin/research/web/rest_scan/raw/q6_complement.jsonl.xz",
+    "record": 1,
+    "body_sha256": "60d38352acf287b397ec2a7c4e70e7a221d84850e254d020d81ab4155e039f77",
+    "started_at": "2026-10-23T21:04:31.524958Z",
+    "url": "https://clob.polymarket.com/prices",
+    "selection": "Only the empty-book asset from this recorded batch",
+    "response": {
+      "33756819428634494869421156246732660693641355331566942335632997771312274133863": {
+        "BUY": "0",
+        "SELL": "1"
+      }
+    }
+  }
+]
