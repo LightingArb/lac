@@ -91,10 +91,13 @@ def c02_fetch(
     ):
         records.extend(s01_scan(ips, order, state, lower, page_size, max_pages))
     ordinary = [r[0] for r in follow if not r[3]]
-    unfinished = [r[0] for r in follow if r[3]]
     records.extend(s02_follow(ips, ordinary, page_size))
+    discovered = {str(m["id"]) for m in records}
+    unfinished = [r[0] for r in follow if r[3] and r[0] not in discovered]
     requests_before, bytes_before = ips.requests, ips.response_bytes
-    records.extend(s02_follow(ips, unfinished, page_size))
+    records.extend(
+        market | {"_web_unfinished_game": True} for market in s02_follow(ips, unfinished, page_size)
+    )
     h_log(
         "runtime_gamma_recent",
         "unfinished_games_follow",
@@ -206,7 +209,7 @@ def s02_follow(ips: IPPool, ids: list[str], size: int) -> list[dict]:
 
 
 def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list]:
-    parents, event_ids, sports_only = {}, set(), set()
+    parents, event_ids, sports_only, ordinary_parents = {}, set(), set(), set()
     market_parents = {}
     for market_id, market in raw.items():
         embedded = market.get("events")
@@ -215,6 +218,8 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         event = embedded[0]
         event_id = s05_text(event.get("id"), True)
         event_ids.add(event_id)
+        if not market.get("_web_unfinished_game"):
+            ordinary_parents.add(event_id)
         market_parents[market_id] = event_id
         complete = isinstance(event.get("tags"), list) and isinstance(event.get("markets"), list)
         sports = complete and any(t.get("slug") == "sports" for t in event["tags"])
@@ -236,12 +241,14 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         if complete and (not sports or all(field in event for field in sports_fields)):
             parents[event_id] = event
     missing = sorted(event_ids - parents.keys())
+    unfinished_parents = set(missing) - ordinary_parents
+    additional_parents = sports_only | unfinished_parents
     requests_before, bytes_before = ips.requests, ips.response_bytes
     additional_requests = additional_bytes = 0
     # Keep sports-only supplements separate so their actual HTTP cost is measurable.
     for additional, group in (
-        (False, sorted(set(missing) - sports_only)),
-        (True, sorted(set(missing) & sports_only)),
+        (False, sorted(set(missing) - additional_parents)),
+        (True, sorted(set(missing) & additional_parents)),
     ):
         group_requests, group_bytes = ips.requests, ips.response_bytes
         for start in range(0, len(group), batch_size):
@@ -282,6 +289,7 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         "parent_enrichment",
         parents=len(missing),
         sports_only_parents=len(set(missing) & sports_only),
+        unfinished_game_parents=len(unfinished_parents),
         additional_requests=additional_requests,
         additional_response_bytes=additional_bytes,
         requests=ips.requests - requests_before,

@@ -272,8 +272,55 @@ def test_recent_market_fetch_routes_feed_enrichment(monkeypatch, client, route):
         return [market] if selected else []
 
     monkeypatch.setattr(recent, "s01_scan", scan)
-    monkeypatch.setattr(recent, "s02_follow", lambda *a: [market] if route == "follow" else [])
+    monkeypatch.setattr(recent, "s02_follow", lambda ips, ids, size: [market] if ids else [])
     monkeypatch.setattr(client, "request", lambda *a, **k: [SPORT])
-    raw = recent.c02_fetch(client, NOW, NOW, [], 100, 20)
+    follow = [(market["id"], False, False, False)] if route == "follow" else []
+    raw = recent.c02_fetch(client, NOW, NOW, follow, 100, 20)
     events, markets, _ = recent.c03_parse(client, raw, 100)
     assert events[0][22] == SPORT["score"] and markets[0][29] == market["sportsMarketType"]
+
+
+@pytest.mark.parametrize("shared_parent", [False, True])
+def test_recent_attributes_only_additional_parent_requests(
+    monkeypatch, client, capsys, shared_parent
+):
+    extra = SPORT if shared_parent else next(e for e in FIXTURE["events"] if e["id"] == "1178304")
+    ordinary = SPORT["markets"][0] | {"events": [{"id": SPORT["id"]}], "_web_seen_at": NOW}
+    source = extra["markets"][-1]
+    extra_market = source | {
+        "events": [{"id": extra["id"]}],
+        "_web_seen_at": NOW,
+        "_web_unfinished_game": True,
+    }
+    sources = {e["id"]: e for e in (SPORT, extra)}
+    sizes = []
+
+    def request(*args, **kwargs):
+        result = [sources[key] for key in kwargs["params"]["id"]]
+        size = len(json.dumps(result).encode())
+        client.requests += 1
+        client.response_bytes += size
+        sizes.append(size)
+        return result
+
+    monkeypatch.setattr(client, "request", request)
+    recent.c03_parse(client, {ordinary["id"]: ordinary, extra_market["id"]: extra_market}, 100)
+    report = next(
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if json.loads(line)["event"] == "parent_enrichment"
+    )
+    assert report["requests"] == (1 if shared_parent else 2)
+    assert report["additional_requests"] == int(not shared_parent)
+    assert report["additional_response_bytes"] == (0 if shared_parent else sizes[-1])
+
+
+def test_recent_does_not_refetch_discovered_unfinished_market(monkeypatch, client, capsys):
+    source = SPORT["markets"][0] | {"_web_seen_at": NOW}
+    monkeypatch.setattr(recent, "s01_scan", lambda *a: [source])
+    ids_seen = []
+    monkeypatch.setattr(recent, "s02_follow", lambda ips, ids, size: ids_seen.extend(ids) or [])
+    recent.c02_fetch(client, NOW, NOW, [(source["id"], True, False, True)], 100, 20)
+    assert ids_seen == []
+    report = json.loads(capsys.readouterr().out)
+    assert report["markets"] == report["requests"] == report["response_bytes"] == 0
