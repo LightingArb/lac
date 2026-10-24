@@ -24,6 +24,17 @@ EVENT = json.loads((Path(__file__).parent / "gamma_event.json").read_text())
 NOW = datetime.now(UTC)
 
 
+@pytest.mark.parametrize("parse", [full.s01_event, recent.s03_event])
+def test_real_event_without_tag_relation(parse):
+    record = json.loads((Path(__file__).parent / "gamma_untagged_event.json").read_text())
+    event = record["event"]
+    assert event["id"] == "578465" and "tags" not in event
+    assert parse(event, NOW)[15].obj == []
+    malformed = event | {"tags": "not-an-array"}
+    with pytest.raises(ContractError, match="tags must be an array"):
+        parse(malformed, NOW)
+
+
 @pytest.mark.parametrize("parse", [full.s02_market, recent.s04_market])
 def test_real_settlements(parse):
     # The single-market research endpoint omits parents; this parser receives the

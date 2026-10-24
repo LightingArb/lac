@@ -211,7 +211,7 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         if not isinstance(response, list) or {str(e["id"]) for e in response} != set(batch):
             raise ContractError("Gamma event batch did not return all requested parents")
         for event in response:
-            if not isinstance(event.get("tags"), list):
+            if event.get("tags") is not None and not isinstance(event["tags"], list):
                 raise ContractError("Gamma parent lookup lacks tags; design review required")
             parents[str(event["id"])] = event
     observed = datetime.now(UTC)
@@ -236,6 +236,9 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
 
 def s03_event(event: dict, observed: datetime) -> tuple:
     tags = event.get("tags")
+    # This row is from the full event endpoint, including a completed parent lookup.
+    if tags is None:
+        tags = []
     if not isinstance(tags, list):
         raise ContractError("Gamma tags must be an array")
     tags = [

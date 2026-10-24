@@ -71,6 +71,9 @@ def c01_scan(ips: IPPool, page_size: int, max_pages: int) -> tuple[list, list, l
 
 def s01_event(event: dict, observed: datetime) -> tuple:
     tags = event.get("tags")
+    # Gamma's event endpoint omits this relation for untagged events (578465).
+    if tags is None:
+        tags = []
     if not isinstance(tags, list):
         raise ContractError("Gamma tags must be an array")
     tags = [
