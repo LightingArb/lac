@@ -1,4 +1,4 @@
-"""Exact R6 REST book fixtures; local DB state is rolled back."""
+"""Exact REST book fixtures; local DB state is rolled back."""
 
 import copy
 import json
@@ -340,3 +340,16 @@ def test_writer_error_is_propagated_and_intake_stops(monkeypatch):
         book.c02_refresh(client, [(str(i), str(i)) for i in range(100)], 1, 3)
     assert len(fetched) <= 3 + client.ip_inflight
     client.close()
+
+
+def test_real_legacy_zero_minimum_preserves_valid_levels(database):
+    source = FIXTURE["legacy_zero_minimum"]
+    assert source["min_order_size"] == "0" and source["bids"] and source["asks"]
+    row = book.s03_parse([source], [("market", source["asset_id"])], NOW)[0]
+    assert row[7] == Decimal(0)
+    assert all(level[1] > 0 for side in row[2:4] for level in json.loads(side))
+    # The observed source identity is replaced only for the local DB branch.
+    assert book.s08_publish(database, [("r7-a", "r7-a-0", *row[2:])]) == (1, 1, 0)
+    assert database.execute(
+        "SELECT min_order_size FROM m_live.m03_clob_book WHERE market_id='r7-a'"
+    ).fetchone() == (Decimal(0),)

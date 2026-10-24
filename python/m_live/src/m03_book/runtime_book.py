@@ -130,7 +130,7 @@ def s03_parse(response: list, markets: list[tuple[str, str]], requested: datetim
             raise ContractError("CLOB book requires a hash")
         tick = s05_number(book.get("tick_size"))
         minimum = s05_number(book.get("min_order_size"))
-        if not 0 < tick <= 1 or minimum <= 0:
+        if not 0 < tick <= 1 or minimum < 0:
             raise ContractError("Invalid CLOB tick/minimum size")
         books[asset] = (bids, asks, source_at, source_hash, tick, minimum)
     return [(market, asset, *books.get(asset, (None,) * 6), requested) for market, asset in markets]

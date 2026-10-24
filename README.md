@@ -324,7 +324,7 @@ flowchart LR
 | bids、asks | jsonb? | 每檔為兩個 JSON 數字 `[價格, 數量]`；買單價格由高至低、賣單由低至高；價格 0～1、數量 >0 |
 | source_timestamp | timestamptz? | Polymarket timestamp（epoch 毫秒）轉為 UTC，保留來源時間 |
 | source_hash | text? | Polymarket 原始 hash；不作內部比對或防重複 |
-| tick_size、min_order_size | numeric? | 來源價格最小跳動與最小下單量，保留精確數值 |
+| tick_size、min_order_size | numeric? | 來源價格最小跳動與最小下單量，保留精確數值；來源最小下單量可以是 0，各檔掛單數量仍須大於 0 |
 | requested_at | timestamptz | 該批送出請求前的時間，到期計算基準 |
 | m_live_updated_at | timestamptz | 該列寫入時間 |
 

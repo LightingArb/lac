@@ -171,5 +171,104 @@
       "neg_risk": false,
       "last_trade_price": ""
     }
-  ]
+  ],
+  "legacy_zero_minimum": {
+    "market": "0xac69bbc516cc8e1318b272293c6e64f8bb513e7a1a8526e09d4eb3d66661ad5c",
+    "asset_id": "35587880037899873745215222782683672924955420755825801090190246562510870580814",
+    "timestamp": "1792836310727",
+    "hash": "e80f0eba751f29bdddcd53da617ff685c7738d5d",
+    "bids": [
+      {
+        "price": "0.01",
+        "size": "2997.34"
+      },
+      {
+        "price": "0.02",
+        "size": "907"
+      },
+      {
+        "price": "0.03",
+        "size": "530"
+      },
+      {
+        "price": "0.05",
+        "size": "5"
+      },
+      {
+        "price": "0.08",
+        "size": "5"
+      }
+    ],
+    "asks": [
+      {
+        "price": "0.98",
+        "size": "10"
+      },
+      {
+        "price": "0.97",
+        "size": "782"
+      },
+      {
+        "price": "0.88",
+        "size": "5"
+      },
+      {
+        "price": "0.64",
+        "size": "10"
+      },
+      {
+        "price": "0.59",
+        "size": "96"
+      },
+      {
+        "price": "0.5",
+        "size": "50"
+      },
+      {
+        "price": "0.47",
+        "size": "40"
+      },
+      {
+        "price": "0.46",
+        "size": "54.02"
+      },
+      {
+        "price": "0.33",
+        "size": "100"
+      },
+      {
+        "price": "0.23",
+        "size": "50"
+      },
+      {
+        "price": "0.22",
+        "size": "19.18"
+      },
+      {
+        "price": "0.21",
+        "size": "10.12"
+      },
+      {
+        "price": "0.12",
+        "size": "120"
+      },
+      {
+        "price": "0.11",
+        "size": "15"
+      },
+      {
+        "price": "0.1",
+        "size": "7.2"
+      }
+    ],
+    "min_order_size": "0",
+    "tick_size": "0.01",
+    "neg_risk": false,
+    "last_trade_price": ""
+  },
+  "legacy_provenance": {
+    "url": "https://clob.polymarket.com/books",
+    "raw_path": "/home/admin/research/web/book_runtime/preliminary/metadata_probe.jsonl.gz",
+    "sha256_gzip": "c109693c2a18294ba6fe023bda052213d81d084ff5496d284404801c8e6971bb"
+  }
 }

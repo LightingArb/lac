@@ -6,7 +6,7 @@ CREATE TABLE m_live.m03_clob_book (
     source_timestamp TIMESTAMPTZ,
     source_hash TEXT,
     tick_size NUMERIC CHECK (tick_size > 0 AND tick_size <= 1),
-    min_order_size NUMERIC CHECK (min_order_size > 0),
+    min_order_size NUMERIC CHECK (min_order_size >= 0),
     requested_at TIMESTAMPTZ NOT NULL,
     m_live_updated_at TIMESTAMPTZ NOT NULL,
     CHECK ((bids IS NULL) = (asks IS NULL))
