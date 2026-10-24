@@ -1,5 +1,5 @@
 CREATE TABLE m_live.m02_clob_price (
-    asset_id TEXT PRIMARY KEY REFERENCES m_live.m01_gamma_outcome (asset_id),
+    asset_id TEXT PRIMARY KEY REFERENCES m_live.m01_outcome (asset_id),
     best_bid NUMERIC CHECK (best_bid > 0 AND best_bid < 1),
     best_ask NUMERIC CHECK (best_ask > 0 AND best_ask < 1),
     midpoint NUMERIC CHECK (midpoint >= 0 AND midpoint <= 1),

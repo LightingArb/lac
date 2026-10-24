@@ -89,7 +89,7 @@ class IPPool:
         ip_limit: dict[str, tuple[int, float]],
         policy: HttpPolicy,
     ):
-        if ip_inflight < 1 or not ip_limit or any(n < 1 or s <= 0 for n, s in ip_limit.values()):
+        if ip_inflight < 1 or any(n < 1 or s <= 0 for n, s in ip_limit.values()):
             raise ValueError("Declare positive IP concurrency and endpoint quotas")
         if (
             policy.timeout <= 0

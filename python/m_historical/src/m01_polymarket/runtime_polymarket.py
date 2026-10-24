@@ -73,13 +73,13 @@ def c01_pending(top_events: int, start: int, end: int, maximum: int) -> tuple[li
         rows = connection.execute(
             """
             WITH chosen AS MATERIALIZED (
-                SELECT event_id FROM m_live.m01_gamma_event
+                SELECT event_id FROM m_live.m01_event
                 WHERE in_current_scan AND active AND NOT closed AND NOT archived
                 ORDER BY volume_24h DESC NULLS LAST,event_id LIMIT %s
             ), assets AS MATERIALIZED (
                 SELECT o.asset_id FROM chosen AS e
-                JOIN m_live.m01_gamma_market AS m ON m.event_id=e.event_id
-                JOIN m_live.m01_gamma_outcome AS o ON o.market_id=m.market_id
+                JOIN m_live.m01_market AS m ON m.event_id=e.event_id
+                JOIN m_live.m01_outcome AS o ON o.market_id=m.market_id
                 WHERE m.in_current_scan AND o.asset_id IS NOT NULL
             )
             SELECT a.asset_id FROM assets AS a

@@ -27,9 +27,9 @@ def c01_assets() -> list[str]:
         return [
             r[0]
             for r in connection.execute("""
-            SELECT o.asset_id FROM m_live.m01_gamma_outcome AS o
-            JOIN m_live.m01_gamma_market AS m ON m.market_id=o.market_id
-            JOIN m_live.m01_gamma_event AS e ON e.event_id=m.event_id
+            SELECT o.asset_id FROM m_live.m01_outcome AS o
+            JOIN m_live.m01_market AS m ON m.market_id=o.market_id
+            JOIN m_live.m01_event AS e ON e.event_id=m.event_id
             WHERE e.in_current_scan AND e.active AND NOT e.closed AND NOT e.archived
               AND m.in_current_scan AND m.active AND NOT m.closed AND NOT m.archived
               AND o.asset_id IS NOT NULL ORDER BY o.asset_id

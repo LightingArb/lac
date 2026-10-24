@@ -48,7 +48,7 @@ def h_process(
     runtime: Callable[..., Result],
     *,
     ip_inflight: int,
-    ip_limit: dict[str, tuple[int, float]],
+    ip_limit: dict[str, tuple[int, float]] | None = None,
     timeout: float,
     retries: int,
     rate_wait: float,
@@ -67,6 +67,7 @@ def h_process(
     period_s measures from round start; rest_s/rest_ms measure from round end.
     Validation failures stop the complete service before further children can start.
     """
+    ip_limit = {} if ip_limit is None else ip_limit
     try:
         if sum(v is not None for v in (period_s, rest_s, rest_ms)) != 1:
             raise ValueError("Declare exactly one of period_s, rest_s, rest_ms")

@@ -115,10 +115,10 @@ cd python
 uv run --env-file ../.env python -m m_live.all_runtime
 ```
 
-- 會開兩個進程：`gamma`（議題、市場、結果）與 `clob`（最新報價），各自每 600 秒跑一輪；一輪跑超過 600 秒，就在跑完後立刻開始下一輪。
-- 空資料庫第一次：gamma 要先發布完整名單，clob 才有東西可以報價，第一批價格可能要等到 clob 的下一輪。
+- 會開四個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 每 600 秒抓最新報價。一輪超過週期時，完成後立即開始下一輪。
+- 空資料庫第一次：市場資料發布後 clob 才有標的；第一批價格可能要等到 clob 的下一輪。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
 - 輸出是一行一個 JSON。`round_finished` 的 `result` 是 `complete` 才算成功。
-- 只跑一輪就結束：加 `--once`。只跑其中一個：加 `--unit gamma` 或 `--unit clob`。
+- 只跑一輪就結束：加 `--once`。只跑其中一個：加 `--unit recent`、`--unit full`、`--unit demand` 或 `--unit clob`。
 - 停止：`Ctrl+C`，會等目前的工作做完再結束。
 
 排程與 HTTP 設定在各模組的 `all_runtime.py`，每個 `h_process` 呼叫對應一個 runtime。`period_s` 從每輪開始起算；`rest_s`／`rest_ms` 從每輪結束起算，三者只能選一個。`not_updated` 在這兩種模式依宣告的週期／休息時間等待；`pending` 立即續跑。一般失敗等待依序為基準的 1、2、4、8 倍，成功後恢復；401／403 只暫停該 runtime 到重啟，期間持續記錯誤。
@@ -150,7 +150,7 @@ npm run dev
 打開 <http://127.0.0.1:5173/prediction>。左上角 Logo 旁邊切換 **Demo／Live**：
 
 - **Demo**：內建的範例資料，不需要資料庫有資料，也不需要資料程式在跑。
-- **Live**：從資料庫讀真實行情（只讀）。畫面每 30 秒重新讀表；資料本身由資料程式每 600 秒更新。
+- **Live**：前端尚未接上 §4 的正式市場表，現在不能使用；Demo 模式可用。
 
 其他指令：`npm run build:static` 會產生單一檔案 `typescript/web_page_demo/dist-static/index.html`，不用伺服器就能打開，適合傳給別人看（只有 Demo）。
 
@@ -158,11 +158,11 @@ npm run dev
 
 ```bash
 psql "postgresql://admin:admin@127.0.0.1:5432/lac_data" -c \
-  "SELECT (SELECT count(*) FROM m_live.m01_gamma_event) AS events,
+  "SELECT (SELECT count(*) FROM m_live.m01_event) AS events,
           (SELECT count(*) FROM m_live.m02_clob_price) AS prices;"
 ```
 
-兩個數字都大於 0，Live 模式就會有東西。
+這兩個數字用來確認資料程式有寫入；前端 Live 接線狀態見上方。
 
 ## 3｜專案結構
 
@@ -198,7 +198,12 @@ flowchart LR
 │   │   ├── all_setup.py       # 建表
 │   │   ├── all_runtime.py     # 常駐執行
 │   │   ├── sql/               # 資料表定義
-│   │   └── src/               # m01_gamma、m02_clob
+│   │   └── src/
+│   │       ├── m01_market/
+│   │       │   ├── runtime_gamma_recent.py  # 新市場、關閉、未定案追蹤
+│   │       │   ├── runtime_gamma_full.py    # 完整議題掃描
+│   │       │   └── runtime_demand.py        # 合併產品需求
+│   │       └── m02_clob/runtime_clob.py     # demo 報價
 │   └── m_historical/          # 歷史分鐘價格（手動單次）
 └── typescript/
     └── web_page_demo/
@@ -213,7 +218,11 @@ flowchart LR
 ## 4｜資料表
 
 - 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
-- **更新頻率：** 議題與市場每 600 秒一輪；報價每 600 秒一輪；歷史是一分鐘一筆，手動回補。
+- **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價仍是 demo 的每 600 秒全量抓取，尚未依需求表更新；歷史是一分鐘一筆，手動回補。
+- **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查。
+- **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描只撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。identity 與結算永久保留。
+- **結算：** resolution_status 原樣存 v1 的 umaResolutionStatus 或 v2 的 resolutionStatus；只有 resolved 才寫各 outcome 的 resolved_price，包含 0.5／0.5。closed 或 1／0 價格本身不代表定案。resolved_seen_at 是 Web 首次看到 resolved 的時間，只寫一次；這是 Gamma 回報的結算，沒有宣稱鏈上付款已驗證。
+- **IP 額度：** 每 IP 在途 4；recent 的 markets 300／10 秒、events 100／10 秒，full 的 events 400／10 秒；keyset 算在同名列表額度內。來源：[Polymarket Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)。demand 沒有 HTTP 額度，也不能發出 HTTP。
 - **層級：** 議題（event）→ 市場（market，畫面上的一個選項列）→ 結果（outcome，例如 Yes 與 No，各有自己的 `asset_id` 與價格）。
 - **價格怎麼讀：**
   - 價格介於 0 到 1，畫面顯示成 ¢：0.86 就是 86¢，代表市場認為有 86% 的機率發生。結算時猜對的一邊每份拿回 1 美元。
@@ -227,7 +236,7 @@ flowchart LR
 
 完整定義在 [m_live/sql](python/m_live/sql/) 與 [m_historical/sql](python/m_historical/sql/)；網站的實際查詢在 [server/live.ts](typescript/web_page_demo/server/live.ts)。
 
-**`m_live.m01_gamma_event`**：一列＝一個議題；主鍵 `event_id`。
+**`m_live.m01_event`**：一列＝一個議題；主鍵 `event_id`。
 
 | 欄位                           | 型別         | 意思                                         |
 | ------------------------------ | ------------ | -------------------------------------------- |
@@ -242,10 +251,10 @@ flowchart LR
 | liquidity                      | numeric?     | 流動性，不是成交量                           |
 | tags                           | jsonb        | 標籤陣列（id、label、slug），分類用          |
 | source_updated_at              | timestamptz? | Polymarket 最後修改時間                      |
-| in_current_scan                | boolean      | 是否出現在最新一次完整掃描                   |
-| observed_at                    | timestamptz  | 資料程式抓到這筆的時間                       |
+| in_current_scan                | boolean      | 是否屬於目前掃描範圍（含 recent 新增）                   |
+| m_live_updated_at                    | timestamptz  | 此筆現況資料發布的時間                       |
 
-**`m_live.m01_gamma_market`**：一列＝一個市場（畫面上的一個選項列）；主鍵 `market_id`。
+**`m_live.m01_market`**：一列＝一個市場（畫面上的一個選項列）；主鍵 `market_id`。
 
 | 欄位                                            | 型別         | 意思                                                       |
 | ----------------------------------------------- | ------------ | ---------------------------------------------------------- |
@@ -261,9 +270,13 @@ flowchart LR
 | active、closed、archived                        | boolean      | 狀態                                                       |
 | accepting_orders、enable_order_book             | boolean?     | 現在是否接受下單、是否有訂單簿                             |
 | volume_total、volume_24h、liquidity             | numeric?     | 累計與 24 小時成交額、流動性（「隱藏低流動性市場」用這欄） |
-| source_updated_at、in_current_scan、observed_at |              | 同議題表                                                   |
+| created_at                                      | timestamptz? | Gamma 市場 createdAt |
+| closed_time                                     | timestamptz? | Gamma closedTime 的原時間，轉存 UTC；不是鏈上付款時間 |
+| resolution_status                               | text? | 依版本選取的原始結算狀態；缺值就是 null |
+| resolved_seen_at                                | timestamptz? | Web 第一次看到 resolved；之後不改 |
+| source_updated_at、in_current_scan、m_live_updated_at |              | 同議題表                                                   |
 
-**`m_live.m01_gamma_outcome`**：一列＝一個結果；主鍵 `market_id`＋`outcome_index`。
+**`m_live.m01_outcome`**：一列＝一個結果；主鍵 `market_id`＋`outcome_index`。
 
 | 欄位          | 型別    | 意思                                    |
 | ------------- | ------- | --------------------------------------- |
@@ -273,6 +286,17 @@ flowchart LR
 | token_id      | text?   | v1 市場的 token 編號                    |
 | position_id   | text?   | v2 市場的 position 編號                 |
 | asset_id      | text?   | 查價格、下單用的編號（唯一）            |
+| resolved_price | numeric? | 0～1；只有市場 resolution_status=resolved 時有值，依 outcomePrices 同索引；其他狀態為 null |
+
+**`m_live.m01_demand_market`**：一列＝一個進行中的市場；主鍵與外鍵都是 `market_id`，參照 `m01_market`。
+
+| 欄位 | 型別 | 意思 |
+| --- | --- | --- |
+| market_id | text | 市場編號 |
+| refresh_seconds | integer | 大於 0；要求的更新間隔（秒） |
+| book_levels | integer? | 0＝最佳買賣價；正整數＝每邊檔數；null＝整本 |
+
+產品清單在 `all_runtime.py`，目前為空。配置產品時，使用 `<PRODUCT>_DB_*` 唯讀該產品的 `m_live.m01_polymarket_demand`（condition_id、refresh_seconds、book_levels）；有要求時只在產品要求中取最短間隔、最大檔數（null 最大）。沒有要求時，議題 tags 含 slug=sports 用 60 秒，其他 10 秒，book_levels=0。某產品讀不到會記錯誤、其他產品照算；本輪需求以一個 transaction 替換，不在進行中範圍的市場移除。需求表是排程輸入，不代表已達到該新鮮度。
 
 **`m_live.m02_clob_price`**：一列＝一個結果的最新價格；主鍵 `asset_id`。
 

@@ -214,6 +214,16 @@ def test_six_results_and_backoff_reset():
     assert [h_delay(Result.ERROR, fixed, 3, n, 7)[0] for n in range(6)] == [10, 20, 40, 80, 80, 80]
 
 
+def test_no_network_runtime_rejects_http():
+    client = IPPool("runtime_demand", [], 1, {}, HttpPolicy(30, 2, 60, 10000))
+    client.report(success=2)
+    assert client.success == 2
+    with pytest.raises(ValueError, match="Undeclared endpoint"):
+        client.request("GET", "https://gamma-api.polymarket.com/events")
+    assert client.requests == 0
+    client.close()
+
+
 def test_auth_pauses_only_runtime_and_keeps_logging(monkeypatch, capsys):
     waits, calls = [], []
 
