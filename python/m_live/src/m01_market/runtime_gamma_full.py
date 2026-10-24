@@ -245,7 +245,7 @@ def c02_publish(
         connection.execute(
             """SELECT event_id FROM m_live.m01_event
             WHERE event_id = ANY(%s) OR (%s AND in_current_scan)
-            ORDER BY event_id FOR UPDATE""",
+            ORDER BY event_id FOR NO KEY UPDATE""",
             (event_ids, scan_started is not None),
         ).close()
         h_upsert(
@@ -276,7 +276,7 @@ def c02_publish(
         connection.execute(
             """SELECT market_id FROM m_live.m01_market
             WHERE market_id=ANY(%s) OR (%s AND in_current_scan)
-            ORDER BY market_id FOR UPDATE""",
+            ORDER BY market_id FOR NO KEY UPDATE""",
             (market_ids, scan_started is not None),
         ).close()
         accepted = set()

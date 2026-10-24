@@ -129,14 +129,31 @@ def test_full_sweep_preserves_new_recent_rows_and_retires_missing(database):
     event = full.s01_event(EVENT, NOW)
     market, outcomes = full.s02_market(EVENT["markets"][2], EVENT["id"], 2, NOW)
     recent.c04_publish([event], [market], outcomes, 100)
-    full.c02_publish([], [], [], 100, NOW - timedelta(minutes=1))
+    boundary = datetime(1900, 1, 1, tzinfo=UTC)
+    full.c02_publish([], [], [], 100, boundary)
     assert database.execute(
         "SELECT in_current_scan FROM m_live.m01_market WHERE market_id=%s", (market[0],)
     ).fetchone()[0]
-    full.c02_publish([], [], [], 100, NOW + timedelta(minutes=1))
+    database.execute(
+        "UPDATE m_live.m01_market SET m_live_updated_at=%s WHERE market_id=%s",
+        (boundary - timedelta(seconds=1), market[0]),
+    )
+    full.c02_publish([], [], [], 100, boundary)
     assert not database.execute(
         "SELECT in_current_scan FROM m_live.m01_market WHERE market_id=%s", (market[0],)
     ).fetchone()[0]
+
+
+def test_full_publish_allows_downstream_foreign_key_reads(database):
+    # A real downstream FK check takes KEY SHARE; metadata updates must coexist.
+    with h_connect() as reader:
+        row = reader.execute(
+            "SELECT market_id FROM m_live.m01_market WHERE in_current_scan ORDER BY market_id LIMIT 1 FOR KEY SHARE"
+        ).fetchone()
+        if row is None:
+            pytest.skip("Run the local crawler once to exercise existing FK readers")
+        database.execute("SET LOCAL lock_timeout='200ms'")
+        full.c02_publish([], [], [], 100, datetime(1900, 1, 1, tzinfo=UTC))
 
 
 def test_cold_bounds_and_follow_rotation(monkeypatch):
