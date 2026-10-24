@@ -46,7 +46,7 @@ LAC 是一個預測市場網站：客戶可以瀏覽 Polymarket 的全部市場�
 | PostgreSQL | **16**，連接埠 **5432**（程式會檢查主版本與連接埠）                                  |
 | Python     | 3.12 以上，用 [uv](https://docs.astral.sh/uv/) 管理                                  |
 | Node.js    | 20 以上（已用 22、24 驗證），含 npm                                                  |
-| 網路       | 要連得到 `gamma-api.polymarket.com`、`clob.polymarket.com`；所在地區連不到時先開 VPN |
+| 網路       | 要連得到 `gamma-api.polymarket.com`、`clob.polymarket.com`、`data-api.polymarket.com`；所在地區連不到時先開 VPN |
 
 Ubuntu 安裝範例：
 
@@ -873,7 +873,7 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-資料庫測試只在本機執行：在 rollback transaction 內清空六張 m_live 表並自建資料，結束後還原 transaction；測試期間會短暫鎖住 m_live。正式機不對正式資料庫跑測試。
+資料庫測試只在本機執行：在 rollback transaction 內清空六張 m_live 表及有外鍵關聯的 m_historical 每日價格表，再自建資料，結束後還原 transaction；測試期間會短暫鎖住這些表，先停止資料程式再跑測試。正式機不對正式資料庫跑測試。
 
 前端的元件、路由與檔案導覽見 [typescript/web_page_demo/README.md](typescript/web_page_demo/README.md)。
 
