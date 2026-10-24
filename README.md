@@ -163,7 +163,7 @@ psql "postgresql://admin:admin@127.0.0.1:5432/lac_data" -c \
           (SELECT count(*) FROM m_live.m03_clob_book) AS books;"
 ```
 
-這兩個數字用來確認資料程式有寫入；前端 Live 接線狀態見上方。
+這三個數字用來確認資料程式有寫入；前端 Live 接線狀態見上方。
 
 ## 3｜專案結構
 
@@ -219,11 +219,11 @@ flowchart LR
 ## 4｜資料表
 
 - 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
-- **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；歷史是一分鐘一筆，手動回補。
+- **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；整本掛單簿預設每 300 秒，產品要求深度時依需求間隔；歷史是一分鐘一筆，手動回補。
 - **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查。
 - **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描只撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。identity 與結算永久保留。
 - **結算：** resolution_status 原樣存 v1 的 umaResolutionStatus 或 v2 的 resolutionStatus；只有 resolved 才寫各 outcome 的 resolved_price，包含 0.5／0.5。closed 或 1／0 價格本身不代表定案。resolved_seen_at 是 Web 首次看到 resolved 的時間，只寫一次；這是 Gamma 回報的結算，沒有宣稱鏈上付款已驗證。
-- **IP 額度：** 每 IP 在途 4；recent 的 markets 300／10 秒、events 100／10 秒，full 的 events 400／10 秒；keyset 算在同名列表額度內。來源：[Polymarket Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)。demand 沒有 HTTP 額度，也不能發出 HTTP。
+- **Gamma IP 額度：** 每 IP 在途 4；recent 的 markets 300／10 秒、events 100／10 秒，full 的 events 400／10 秒；keyset 算在同名列表額度內。來源：[Polymarket Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)。demand 沒有 HTTP 額度，也不能發出 HTTP。
 - **層級：** 議題（event）→ 市場（market，畫面上的一個選項列）→ 結果（outcome，例如 Yes 與 No，各有自己的 `asset_id` 與價格）。
 - **價格怎麼讀：**
   - 價格介於 0 到 1，畫面顯示成 ¢：0.86 就是 86¢，代表市場認為有 86% 的機率發生。結算時猜對的一邊每份拿回 1 美元。
