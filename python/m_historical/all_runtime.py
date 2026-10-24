@@ -2,8 +2,8 @@ import argparse
 import time
 from datetime import datetime
 
+from h_shared.h_ip_pool import h_outbound_ips
 from h_shared.h_process import h_process, h_wait
-from m_historical.all_setup import all_setup
 from m_historical.src.m01_polymarket.runtime_polymarket import runtime_polymarket
 
 
@@ -23,18 +23,24 @@ def all_runtime() -> None:
         end = int(parsed.timestamp()) // 60 * 60
     else:
         end = int(time.time()) // 60 * 60
-    all_setup()
+    OUTBOUND_IPS = h_outbound_ips()
+    # https://docs.polymarket.com/api-reference/rate-limits
+    # Data API /v2/prices-history: 200 requests per IP per 10-second window.
     h_wait(
         [
             h_process(
                 runtime_polymarket,
                 once=True,
-                interval=60,
+                rest_s=60,
+                ips=OUTBOUND_IPS,
+                ip_inflight=4,
+                ip_limit={"/v2/prices-history": (200, 10)},
                 timeout=30,
                 retries=2,
-                rate=10,
                 rate_wait=60,
-                workers=8,
+                backoff_max=8,
+                auth_log_s=60,
+                max_response_bytes=64 * 1024 * 1024,
                 days=args.days,
                 top_events=args.top_events,
                 end=end,

@@ -8,26 +8,32 @@ from decimal import Decimal, InvalidOperation
 from psycopg.types.json import Jsonb
 
 from h_shared.h_db import h_connect, h_upsert
-from h_shared.h_process import ContractError, Http, Result, h_log
+from h_shared.h_ip_pool import ContractError, IPPool
+from h_shared.h_log import h_log
+from h_shared.h_process import Result
 
 
-def runtime_gamma(http: Http, *, page_size: int, max_pages: int, write_batch: int) -> Result:
+def runtime_gamma(ips: IPPool, *, page_size: int, max_pages: int, write_batch: int) -> Result:
     started = time.monotonic()
-    events, markets, outcomes, pages = c01_scan(http, page_size, max_pages)
+    events, markets, outcomes, pages = c01_scan(ips, page_size, max_pages)
     c02_publish(events, markets, outcomes, write_batch)
-    c03_report(events, markets, outcomes, pages, http.requests, started)
+    ips.report(success=len(events) + len(markets) + len(outcomes), no_data=int(not events))
+    c03_report(events, markets, outcomes, pages, ips.requests, started)
     return Result.COMPLETE
 
 
-def c01_scan(http: Http, page_size: int, max_pages: int) -> tuple[list, list, list, int]:
+def c01_scan(ips: IPPool, page_size: int, max_pages: int) -> tuple[list, list, list, int]:
     events, markets, outcomes = {}, {}, {}
     cursor, cursors = None, set()
     for page in range(max_pages):
         params = {"limit": page_size, "closed": "false"}
         if cursor:
             params["after_cursor"] = cursor
-        response = http.request(
-            "GET", "https://gamma-api.polymarket.com/events/keyset", params=params
+        response = ips.request(
+            "GET",
+            "https://gamma-api.polymarket.com/events/keyset",
+            params=params,
+            target=f"events page {page + 1}",
         )
         if not isinstance(response, dict) or not isinstance(response.get("events"), list):
             raise ContractError("Gamma keyset response lacks events array")

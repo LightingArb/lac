@@ -75,6 +75,7 @@ DB_PORT=5432
 DB_NAME=lac_data
 DB_USER=admin
 DB_PASSWORD=admin
+OUTBOUND_IPS=[]
 ```
 
 這是本機開發用的預設值，只連本機資料庫。`DB_NAME` 必須是 `lac_data`、`DB_PORT` 必須是 `5432`，程式會檢查；帳號密碼可以改成你自己的。網站的 `DB_*` 只在伺服器端使用，不會傳到瀏覽器。
@@ -119,6 +120,10 @@ uv run --env-file ../.env python -m m_live.all_runtime
 - 輸出是一行一個 JSON。`round_finished` 的 `result` 是 `complete` 才算成功。
 - 只跑一輪就結束：加 `--once`。只跑其中一個：加 `--unit gamma` 或 `--unit clob`。
 - 停止：`Ctrl+C`，會等目前的工作做完再結束。
+
+排程與 HTTP 設定在各模組的 `all_runtime.py`，每個 `h_process` 呼叫對應一個 runtime。`period_s` 從每輪開始起算；`rest_s`／`rest_ms` 從每輪結束起算，三者只能選一個。`not_updated` 在這兩種模式依宣告的週期／休息時間等待；`pending` 立即續跑。一般失敗等待依序為基準的 1、2、4、8 倍，成功後恢復；401／403 只暫停該 runtime 到重啟，期間持續記錯誤。
+
+三個 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的額外 IP（JSON array）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。額外 IP 必須存在於本機網卡，否則服務啟動失敗；額外 IP 的請求會綁定來源位址。每個 IP 最多 4 個在途請求，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該 IP 的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
 
 **選用：歷史價格（走勢圖用）。** 歷史是手動跑的單次工作，不會跟著上面的程式自動更新。預設抓 24 小時成交量前 500 個進行中議題的全部結果，固定抓最近 3 天：
 

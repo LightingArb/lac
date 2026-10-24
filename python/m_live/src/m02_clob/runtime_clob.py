@@ -1,21 +1,24 @@
 """Read all open assets and publish endpoint-specific values and observation times."""
 
 import time
+from contextlib import closing
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from h_shared.h_db import h_connect, h_upsert
-from h_shared.h_process import ContractError, Http, Result, h_log
+from h_shared.h_ip_pool import ContractError, IPPool
+from h_shared.h_log import h_log
+from h_shared.h_process import Result
 
 
-def runtime_clob(http: Http, *, request_items: int, write_batch: int) -> Result:
+def runtime_clob(ips: IPPool, *, request_items: int, write_batch: int, report_every: int) -> Result:
     started = time.monotonic()
     assets = c01_assets()
     if not assets:
         h_log("runtime_clob", "unavailable", reason="No published open assets")
         return Result.NOT_UPDATED
-    c02_refresh(http, assets, request_items, write_batch)
-    c03_report(assets, started, http.requests)
+    c02_refresh(ips, assets, request_items, write_batch, report_every)
+    c03_report(assets, started, ips.requests)
     return Result.COMPLETE
 
 
@@ -34,22 +37,25 @@ def c01_assets() -> list[str]:
         ]
 
 
-def c02_refresh(http: Http, assets: list[str], request_items: int, write_batch: int) -> None:
+def c02_refresh(
+    ips: IPPool, assets: list[str], request_items: int, write_batch: int, report_every: int
+) -> None:
     for endpoint in ("prices", "midpoints", "last-trades-prices"):
         size = request_items // 2 if endpoint == "prices" else request_items
         tasks = [(endpoint, assets[i : i + size]) for i in range(0, len(assets), size)]
         returned = 0
 
         def fetch(task):
-            return s01_fetch(http, *task)
+            return s01_fetch(ips, *task)
 
         # Workers do network I/O only; one connection publishes each bounded response.
-        with h_connect() as connection:
-            for index, (rows, count) in enumerate(http.map(fetch, tasks)):
+        with h_connect() as connection, closing(ips.map(fetch, tasks)) as responses:
+            for index, (rows, count) in enumerate(responses):
                 s03_write(connection, endpoint, rows, write_batch)
                 connection.commit()
+                ips.report(success=count, no_data=len(rows) - count)
                 returned += count
-                if (index + 1) % 100 == 0:
+                if (index + 1) % report_every == 0:
                     h_log(
                         "runtime_clob",
                         "batches",
@@ -68,13 +74,15 @@ def c02_refresh(http: Http, assets: list[str], request_items: int, write_batch: 
         )
 
 
-def s01_fetch(http: Http, endpoint: str, assets: list[str]) -> tuple[list[tuple], int]:
+def s01_fetch(ips: IPPool, endpoint: str, assets: list[str]) -> tuple[list[tuple], int]:
     body = (
         [{"token_id": token, "side": side} for token in assets for side in ("BUY", "SELL")]
         if endpoint == "prices"
         else [{"token_id": token} for token in assets]
     )
-    response = http.request("POST", "https://clob.polymarket.com/" + endpoint, body=body)
+    response = ips.request(
+        "POST", "https://clob.polymarket.com/" + endpoint, body=body, target=assets
+    )
     observed = datetime.now(UTC)
     if endpoint == "last-trades-prices":
         if not isinstance(response, list):

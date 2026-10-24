@@ -1,16 +1,19 @@
 """Fixed-window history for the top-volume events; no fabricated minutes."""
 
 import time
+from contextlib import closing
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import islice
 
 from h_shared.h_db import h_connect, h_upsert
-from h_shared.h_process import ContractError, Http, ProviderError, Result, h_log
+from h_shared.h_ip_pool import ContractError, IPPool, ProviderError
+from h_shared.h_log import h_log
+from h_shared.h_process import Result
 
 
 def runtime_polymarket(
-    http: Http,
+    ips: IPPool,
     *,
     days: int,
     top_events: int,
@@ -26,37 +29,42 @@ def runtime_polymarket(
     start = end - days * 86400
     assets, pending = c01_pending(top_events, start, end, max_assets)
     if not assets:
-        c03_report(start, end, top_events, started, http.requests)
+        c03_report(start, end, top_events, started, ips.requests)
         return Result.COMPLETE
 
     def fetch(asset):
-        return c02_fetch(http, asset, start, end, page_limit, max_pages, bucket_seconds)
+        return c02_fetch(ips, asset, start, end, page_limit, max_pages, bucket_seconds)
 
-    responses = http.map(fetch, assets)
-    while results := list(islice(responses, publish_assets)):
-        s02_publish(results, start, end, write_batch)
-        h_log(
-            "runtime_polymarket",
-            "batch",
-            assets=len(results),
-            points=sum(len(r[1]) for r in results),
-            errors=sum(r[2] is not None for r in results),
-        )
-        errors = [r[2] for r in results if r[2] is not None]
-        if errors:
-            # Completed assets remain durable. Retry policy belongs to the outer caller.
-            raise errors[0]
+    with closing(ips.map(fetch, assets)) as responses:
+        while results := list(islice(responses, publish_assets)):
+            s02_publish(results, start, end, write_batch)
+            ips.report(
+                success=sum(r[2] is None and bool(r[1]) for r in results),
+                no_data=sum(r[2] is None and not r[1] for r in results),
+                error=sum(r[2] is not None for r in results),
+            )
+            h_log(
+                "runtime_polymarket",
+                "batch",
+                assets=len(results),
+                points=sum(len(r[1]) for r in results),
+                errors=sum(r[2] is not None for r in results),
+            )
+            errors = [r[2] for r in results if r[2] is not None]
+            if errors:
+                # Completed assets remain durable. Retry policy belongs to the outer caller.
+                raise errors[0]
     h_log(
         "runtime_polymarket",
         "chunk",
         assets=len(assets),
         pending=pending,
         seconds=time.monotonic() - started,
-        requests=http.requests,
+        requests=ips.requests,
     )
     if pending:
         return Result.PENDING
-    c03_report(start, end, top_events, started, http.requests)
+    c03_report(start, end, top_events, started, ips.requests)
     return Result.COMPLETE
 
 
@@ -90,7 +98,7 @@ def c01_pending(top_events: int, start: int, end: int, maximum: int) -> tuple[li
 
 
 def c02_fetch(
-    http: Http, asset: str, start: int, end: int, limit: int, max_pages: int, bucket_seconds: int
+    ips: IPPool, asset: str, start: int, end: int, limit: int, max_pages: int, bucket_seconds: int
 ) -> tuple[str, list[tuple], Exception | None]:
     points, cursors = {}, set()
     params = {
@@ -102,8 +110,11 @@ def c02_fetch(
     }
     try:
         for _ in range(max_pages):
-            response = http.request(
-                "GET", "https://data-api.polymarket.com/v2/prices-history", params=params
+            response = ips.request(
+                "GET",
+                "https://data-api.polymarket.com/v2/prices-history",
+                params=params,
+                target=asset,
             )
             parsed, cursor = s01_points(response, start, end)
             for minute, point in parsed.items():
@@ -127,7 +138,7 @@ def c02_fetch(
             params["cursor"] = cursor
         raise ContractError("History pagination exceeded declared bound")
     except (ProviderError, ContractError) as error:
-        h_log("runtime_polymarket", "asset_error", asset_id=asset, reason=str(error))
+        ips.log_error(error, target=asset)
         return asset, [], error
 
 
