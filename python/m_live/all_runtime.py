@@ -41,6 +41,8 @@ def all_runtime() -> None:
                 overlap_seconds=120,
                 lookback_hours=1,
                 follow_limit=1000,
+                game_follow_hours=24,
+                game_follow_max=500,
                 event_batch=100,
                 write_batch=1000,
             )

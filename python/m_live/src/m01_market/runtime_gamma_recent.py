@@ -13,6 +13,7 @@ from h_shared.h_log import h_log
 from h_shared.h_process import Result
 
 _after_market = ""
+_after_event = ""
 
 
 def runtime_gamma_recent(
@@ -25,9 +26,11 @@ def runtime_gamma_recent(
     follow_limit: int,
     event_batch: int,
     write_batch: int,
+    game_follow_hours: int,
+    game_follow_max: int,
 ) -> Result:
-    """Read current DB bounds, request Gamma, then publish one atomic metadata batch."""
-    global _after_market
+    """Publish ordinary metadata, then bounded event scores, with I/O outside transactions."""
+    global _after_market, _after_event
     started = datetime.now(UTC)
     created, closed, follow = c01_bounds(started, lookback_hours, overlap_seconds, follow_limit)
     raw = c02_fetch(ips, created, closed, follow, page_size, max_pages)
@@ -36,6 +39,12 @@ def runtime_gamma_recent(
     c05_report(ips, events, markets, outcomes, accepted, follow, created, closed)
     if follow:
         _after_market = follow[-1][0]
+    games = c06_game_bounds(datetime.now(UTC), game_follow_hours, game_follow_max)
+    scores = c07_fetch_games(ips, games, page_size)
+    updated = c08_publish_games(scores, game_follow_hours, write_batch)
+    ips.report(success=updated)
+    if games:
+        _after_event = games[-1][0]
     return Result.COMPLETE
 
 
@@ -45,32 +54,18 @@ def c01_bounds(started: datetime, lookback: int, overlap: int, maximum: int) -> 
             "SELECT max(created_at), max(closed_time) FROM m_live.m01_market"
         ).fetchone()
         follow = connection.execute(
-            """SELECT m.market_id, m.closed, m.in_current_scan,
-                (m.closed AND m.resolution_status='resolved') AS unfinished_game
-            FROM m_live.m01_market m
-            JOIN m_live.m01_event e ON e.event_id=m.event_id
-            WHERE ((m.closed AND m.resolution_status IS DISTINCT FROM 'resolved')
-                OR (NOT m.closed AND NOT m.in_current_scan)
-                OR (m.closed AND e.ended IS DISTINCT FROM TRUE
-                    AND (e.game_id IS NOT NULL OR e.game_start_at IS NOT NULL)
-                    AND e.tags @> '[{"slug":"sports"}]'::jsonb))
-                AND m.market_id > %s
-            ORDER BY m.market_id LIMIT %s""",
+            """SELECT market_id, closed, in_current_scan FROM m_live.m01_market
+            WHERE ((closed AND resolution_status IS DISTINCT FROM 'resolved')
+                OR (NOT closed AND NOT in_current_scan)) AND market_id > %s
+            ORDER BY market_id LIMIT %s""",
             (_after_market, maximum),
         ).fetchall()
         if len(follow) < maximum and _after_market:
             follow += connection.execute(
-                """SELECT m.market_id, m.closed, m.in_current_scan,
-                (m.closed AND m.resolution_status='resolved') AS unfinished_game
-            FROM m_live.m01_market m
-            JOIN m_live.m01_event e ON e.event_id=m.event_id
-                WHERE ((m.closed AND m.resolution_status IS DISTINCT FROM 'resolved')
-                    OR (NOT m.closed AND NOT m.in_current_scan)
-                    OR (m.closed AND e.ended IS DISTINCT FROM TRUE
-                    AND (e.game_id IS NOT NULL OR e.game_start_at IS NOT NULL)
-                    AND e.tags @> '[{"slug":"sports"}]'::jsonb))
-                    AND m.market_id <= %s
-                ORDER BY m.market_id LIMIT %s""",
+                """SELECT market_id, closed, in_current_scan FROM m_live.m01_market
+                WHERE ((closed AND resolution_status IS DISTINCT FROM 'resolved')
+                    OR (NOT closed AND NOT in_current_scan)) AND market_id <= %s
+                ORDER BY market_id LIMIT %s""",
                 (_after_market, maximum - len(follow)),
             ).fetchall()
     return (
@@ -90,21 +85,7 @@ def c02_fetch(
         ("closedTime", "true", closed),
     ):
         records.extend(s01_scan(ips, order, state, lower, page_size, max_pages))
-    ordinary = [r[0] for r in follow if not r[3]]
-    records.extend(s02_follow(ips, ordinary, page_size))
-    discovered = {str(m["id"]) for m in records}
-    unfinished = [r[0] for r in follow if r[3] and r[0] not in discovered]
-    requests_before, bytes_before = ips.requests, ips.response_bytes
-    records.extend(
-        market | {"_web_unfinished_game": True} for market in s02_follow(ips, unfinished, page_size)
-    )
-    h_log(
-        "runtime_gamma_recent",
-        "unfinished_games_follow",
-        markets=len(unfinished),
-        requests=ips.requests - requests_before,
-        response_bytes=ips.response_bytes - bytes_before,
-    )
+    records.extend(s02_follow(ips, [r[0] for r in follow], page_size))
     markets, first_resolved = {}, {}
     for market in records:
         status = market.get(
@@ -209,7 +190,7 @@ def s02_follow(ips: IPPool, ids: list[str], size: int) -> list[dict]:
 
 
 def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list]:
-    parents, event_ids, sports_only, ordinary_parents = {}, set(), set(), set()
+    parents, event_ids, sports_only = {}, set(), set()
     market_parents = {}
     for market_id, market in raw.items():
         embedded = market.get("events")
@@ -218,8 +199,6 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         event = embedded[0]
         event_id = s05_text(event.get("id"), True)
         event_ids.add(event_id)
-        if not market.get("_web_unfinished_game"):
-            ordinary_parents.add(event_id)
         market_parents[market_id] = event_id
         complete = isinstance(event.get("tags"), list) and isinstance(event.get("markets"), list)
         sports = complete and any(t.get("slug") == "sports" for t in event["tags"])
@@ -241,8 +220,7 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         if complete and (not sports or all(field in event for field in sports_fields)):
             parents[event_id] = event
     missing = sorted(event_ids - parents.keys())
-    unfinished_parents = set(missing) - ordinary_parents
-    additional_parents = sports_only | unfinished_parents
+    additional_parents = sports_only
     requests_before, bytes_before = ips.requests, ips.response_bytes
     additional_requests = additional_bytes = 0
     # Keep sports-only supplements separate so their actual HTTP cost is measurable.
@@ -289,7 +267,6 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         "parent_enrichment",
         parents=len(missing),
         sports_only_parents=len(set(missing) & sports_only),
-        unfinished_game_parents=len(unfinished_parents),
         additional_requests=additional_requests,
         additional_response_bytes=additional_bytes,
         requests=ips.requests - requests_before,
@@ -696,7 +673,138 @@ def c05_report(
         accepted_markets=accepted,
         outcomes=len(outcomes),
         followed=len(follow),
+        follow_cursor=_after_market,
+        follow_first=follow[0][0] if follow else None,
+        follow_last=follow[-1][0] if follow else None,
+        follow_wrapped=bool(_after_market and any(r[0] <= _after_market for r in follow)),
         created_lower=created.isoformat(),
         closed_lower=closed.isoformat(),
         absent_then_closed=transitions[:10],
     )
+
+
+def c06_game_bounds(started: datetime, hours: int, maximum: int) -> list[tuple]:
+    """Rotate event IDs independently; unknown oldest close time cannot qualify."""
+    cutoff = started - timedelta(hours=hours)
+    sql = """SELECT e.event_id, min(m.market_id), min(m.closed_time)
+        FROM m_live.m01_event e JOIN m_live.m01_market m USING(event_id)
+        WHERE e.ended IS DISTINCT FROM TRUE AND e.tags @> '[{{"slug":"sports"}}]'::jsonb
+            AND m.closed AND e.event_id {comparison} %s
+        GROUP BY e.event_id HAVING min(m.closed_time) >= %s
+        ORDER BY e.event_id LIMIT %s"""
+    with h_connect() as connection:
+        games = connection.execute(
+            sql.format(comparison=">"), (_after_event, cutoff, maximum)
+        ).fetchall()
+        if len(games) < maximum and _after_event:
+            games += connection.execute(
+                sql.format(comparison="<="), (_after_event, cutoff, maximum - len(games))
+            ).fetchall()
+    return games
+
+
+def c07_fetch_games(ips: IPPool, games: list[tuple], size: int) -> list[tuple]:
+    """One market per event; embedded scores never enter parent enrichment."""
+    parents = {r[1]: r[0] for r in games}
+    requests_before, bytes_before = ips.requests, ips.response_bytes
+    requested = datetime.now(UTC)
+    rows = []
+    for market in s02_follow(ips, list(parents), size):
+        embedded = market.get("events")
+        if (
+            not isinstance(embedded, list)
+            or len(embedded) != 1
+            or not isinstance(embedded[0], dict)
+        ):
+            raise ContractError("Game follow requires one embedded parent")
+        event = embedded[0]
+        event_id = s05_text(event.get("id"), True)
+        if event_id != parents[str(market["id"])]:
+            raise ContractError("Game follow returned unexpected parent")
+        rows.append(
+            (
+                event_id,
+                s10_raw_text(event.get("gameId"), identifier=True),
+                s08_date(event.get("startTime")),
+                s11_day(event.get("eventDate")),
+                s10_raw_text(event.get("score")),
+                s10_raw_text(event.get("period")),
+                s10_raw_text(event.get("elapsed")),
+                s06_bool(event.get("live"), True),
+                s06_bool(event.get("ended"), True),
+                s08_date(event.get("finishedTimestamp")),
+                s08_date(event.get("updatedAt")),
+                requested,
+            )
+        )
+    h_log(
+        "runtime_gamma_recent",
+        "game_follow",
+        events=len(games),
+        returned=len(rows),
+        cursor=_after_event,
+        first=games[0][0] if games else None,
+        last=games[-1][0] if games else None,
+        requests=ips.requests - requests_before,
+        response_bytes=ips.response_bytes - bytes_before,
+    )
+    return rows
+
+
+def c08_publish_games(rows: list[tuple], hours: int, batch: int) -> int:
+    """Only scores and publication/version clocks change; recheck lifetime after I/O."""
+    rows = sorted(rows, key=lambda r: r[0])
+    if not rows:
+        return 0
+    updated, ended = 0, []
+    with h_connect() as connection:
+        connection.execute(
+            """SELECT event_id FROM m_live.m01_event WHERE event_id=ANY(%s)
+            ORDER BY event_id FOR NO KEY UPDATE""",
+            ([r[0] for r in rows],),
+        ).close()
+        published = datetime.now(UTC)
+        for start in range(0, len(rows), batch):
+            group = rows[start : start + batch]
+            placeholders = ",".join(
+                [
+                    (
+                        "(%s::text,%s::text,%s::timestamptz,%s::date,%s::text,%s::text,%s::text,"
+                        "%s::boolean,%s::boolean,%s::timestamptz,%s::timestamptz,%s::timestamptz)"
+                    )
+                ]
+                * len(group)
+            )
+            accepted = connection.execute(
+                """WITH incoming(event_id,game_id,game_start_at,game_date,score,period,elapsed,
+                    live,ended,game_finished_at,source_updated_at,requested_at) AS (VALUES """
+                + placeholders
+                + """),
+                eligible AS (
+                    SELECT event_id FROM m_live.m01_market
+                    WHERE closed AND event_id=ANY(%s)
+                    GROUP BY event_id HAVING min(closed_time)>=%s
+                )
+                UPDATE m_live.m01_event e SET game_id=i.game_id,game_start_at=i.game_start_at,
+                    game_date=i.game_date,score=i.score,period=i.period,elapsed=i.elapsed,
+                    live=i.live,ended=i.ended,game_finished_at=i.game_finished_at,
+                    source_updated_at=i.source_updated_at,m_live_updated_at=%s
+                FROM incoming i JOIN eligible g USING(event_id)
+                WHERE e.event_id=i.event_id AND e.ended IS DISTINCT FROM TRUE
+                    AND e.tags @> '[{"slug":"sports"}]'::jsonb
+                    AND e.m_live_updated_at<=i.requested_at
+                    AND (e.source_updated_at IS NULL OR i.source_updated_at>=e.source_updated_at)
+                RETURNING e.event_id,e.ended""",
+                [v for row in group for v in row]
+                + [[r[0] for r in group], published - timedelta(hours=hours), published],
+            ).fetchall()
+            updated += len(accepted)
+            ended.extend(r[0] for r in accepted if r[1] is True)
+    h_log(
+        "runtime_gamma_recent",
+        "game_scores_published",
+        updated=updated,
+        ended=len(ended),
+        ended_event_ids=ended[:10],
+    )
+    return updated

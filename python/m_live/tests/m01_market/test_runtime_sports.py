@@ -38,6 +38,7 @@ def database(monkeypatch, empty_database):
     monkeypatch.setattr(full, "h_connect", lambda: nullcontext(empty_database))
     monkeypatch.setattr(recent, "h_connect", lambda: nullcontext(empty_database))
     monkeypatch.setattr(recent, "_after_market", "")
+    monkeypatch.setattr(recent, "_after_event", "")
     return empty_database
 
 
@@ -226,41 +227,6 @@ def test_recent_reuses_or_enriches_only_needed_parents(monkeypatch, client, mode
     assert len(events) == len(markets) == 1
 
 
-@pytest.mark.parametrize("initial_ended", [False, None])
-def test_recent_captures_final_score_after_sweep_exit_and_early_resolution(
-    database, monkeypatch, client, initial_ended
-):
-    # Real final response plus synthetic earlier states exercise the closing order.
-    initial = copy.deepcopy(SPORT)
-    initial.update(
-        score="1-2",
-        live=True,
-        ended=initial_ended,
-        closed=False,
-        updatedAt=(NOW - timedelta(hours=1)).isoformat(),
-    )
-    source = initial["markets"][0]
-    source.update(closed=True, umaResolutionStatus="resolved", outcomePrices='["0","1"]')
-    market, outcomes = full.s02_market(source, initial["id"], 0, NOW, sports=True)
-    full.c02_publish([full.s01_event(initial, NOW)], [market], outcomes, 100)
-    full.c02_publish([], [], [], 100, NOW + timedelta(days=1))
-    assert not database.execute(
-        "SELECT in_current_scan FROM m_live.m01_event WHERE event_id=%s", (initial["id"],)
-    ).fetchone()[0]
-    assert [r[0] for r in recent.c01_bounds(NOW, 1, 120, 1000)[2]] == [source["id"]]
-    final = copy.deepcopy(SPORT)
-    final["updatedAt"] = (NOW + timedelta(hours=1)).isoformat()
-    source["events"] = [{"id": final["id"]}]
-    source["updatedAt"] = final["updatedAt"]
-    monkeypatch.setattr(client, "request", lambda *a, **k: [final])
-    rows = recent.c03_parse(client, {source["id"]: source | {"_web_seen_at": NOW}}, 100)
-    recent.c04_publish(*rows, 100)
-    assert database.execute(
-        "SELECT score,ended,in_current_scan FROM m_live.m01_event WHERE event_id=%s", (final["id"],)
-    ).fetchone() == (final["score"], True, False)
-    assert recent.c01_bounds(NOW, 1, 120, 1000)[2] == []
-
-
 @pytest.mark.parametrize("route", ["new", "closed", "follow"])
 def test_recent_market_fetch_routes_feed_enrichment(monkeypatch, client, route):
     market = SPORT["markets"][0] | {"events": [{"id": SPORT["id"]}], "_web_seen_at": NOW}
@@ -274,53 +240,192 @@ def test_recent_market_fetch_routes_feed_enrichment(monkeypatch, client, route):
     monkeypatch.setattr(recent, "s01_scan", scan)
     monkeypatch.setattr(recent, "s02_follow", lambda ips, ids, size: [market] if ids else [])
     monkeypatch.setattr(client, "request", lambda *a, **k: [SPORT])
-    follow = [(market["id"], False, False, False)] if route == "follow" else []
+    follow = [(market["id"], False, False)] if route == "follow" else []
     raw = recent.c02_fetch(client, NOW, NOW, follow, 100, 20)
     events, markets, _ = recent.c03_parse(client, raw, 100)
     assert events[0][22] == SPORT["score"] and markets[0][29] == market["sportsMarketType"]
 
 
-@pytest.mark.parametrize("shared_parent", [False, True])
-def test_recent_attributes_only_additional_parent_requests(
-    monkeypatch, client, capsys, shared_parent
+def seed_game(
+    database, event_id, market_ids, *, ended=False, close_age=1, sports=True, unresolved=False
 ):
-    extra = SPORT if shared_parent else next(e for e in FIXTURE["events"] if e["id"] == "1178304")
-    ordinary = SPORT["markets"][0] | {"events": [{"id": SPORT["id"]}], "_web_seen_at": NOW}
-    source = extra["markets"][-1]
-    extra_market = source | {
-        "events": [{"id": extra["id"]}],
-        "_web_seen_at": NOW,
-        "_web_unfinished_game": True,
-    }
-    sources = {e["id"]: e for e in (SPORT, extra)}
-    sizes = []
+    event = copy.deepcopy(SPORT)
+    event.update(
+        id=event_id,
+        ended=ended,
+        score="1-2",
+        live=True,
+        updatedAt=(NOW - timedelta(hours=2)).isoformat(),
+    )
+    if not sports:
+        event["tags"] = []
+    markets, outcomes = [], []
+    for market_id in market_ids:
+        source = copy.deepcopy(SPORT["markets"][0])
+        source.update(
+            id=market_id,
+            clobTokenIds=json.dumps([market_id + "-yes", market_id + "-no"]),
+            closed=True,
+            closedTime=(NOW - timedelta(hours=close_age)).isoformat(),
+            umaResolutionStatus="proposed" if unresolved else "resolved",
+            outcomePrices='["0","1"]',
+        )
+        row, results = full.s02_market(source, event_id, 0, NOW, sports=sports)
+        markets.append(row)
+        outcomes.extend(results)
+    full.c02_publish([full.s01_event(event, NOW)], markets, outcomes, 100)
+    return event
 
-    def request(*args, **kwargs):
-        result = [sources[key] for key in kwargs["params"]["id"]]
-        size = len(json.dumps(result).encode())
+
+def test_game_selection_one_market_oldest_close_and_expiry(database, monkeypatch):
+    seed_game(database, "game-a", ["ma-z", "ma-a"])
+    seed_game(database, "game-b", ["mb"], ended=None, close_age=24)
+    seed_game(database, "game-c", ["mc"], close_age=25)
+    seed_game(database, "game-d", ["md"], ended=True)
+    seed_game(database, "game-e", ["me"], sports=False)
+    seed_game(database, "game-f", ["mf"])
+    database.execute("UPDATE m_live.m01_market SET closed_time=NULL WHERE market_id='mf'")
+    # One recent market must not revive an event whose first market closed too long ago.
+    database.execute(
+        "UPDATE m_live.m01_market SET closed_time=%s WHERE market_id='ma-z'",
+        (NOW - timedelta(hours=25),),
+    )
+    assert [r[0] for r in recent.c06_game_bounds(NOW, 24, 500)] == ["game-b"]
+    database.execute(
+        "UPDATE m_live.m01_market SET closed_time=%s WHERE market_id='ma-z'",
+        (NOW - timedelta(hours=1),),
+    )
+    # Neither game ID nor start time is required by the event follow contract.
+    database.execute(
+        "UPDATE m_live.m01_event SET game_id=NULL,game_start_at=NULL WHERE event_id='game-a'"
+    )
+    rows = recent.c06_game_bounds(NOW, 24, 500)
+    assert [(r[0], r[1]) for r in rows] == [("game-a", "ma-a"), ("game-b", "mb")]
+    assert recent.c06_game_bounds(NOW + timedelta(microseconds=1), 24, 500)[0][0] == "game-a"
+    assert len(recent.c06_game_bounds(NOW + timedelta(microseconds=1), 24, 500)) == 1
+    monkeypatch.setattr(recent, "_after_event", "game-a")
+    assert [r[0] for r in recent.c06_game_bounds(NOW, 24, 2)] == ["game-b", "game-a"]
+
+
+def test_game_and_ordinary_quotas_are_independent(database, monkeypatch):
+    seed_game(database, "game-ordinary", [f"o-{i:04}" for i in range(1002)], unresolved=True)
+    seed_game(database, "game-resolved", ["r-a", "r-b"])
+    follow = recent.c01_bounds(NOW, 1, 120, 1000)[2]
+    assert len(follow) == 1000 and all(r[0].startswith("o-") for r in follow)
+    assert [(r[0], r[1]) for r in recent.c06_game_bounds(NOW, 24, 1)] == [
+        ("game-ordinary", "o-0000")
+    ]
+    monkeypatch.setattr(recent, "_after_market", follow[-1][0])
+    monkeypatch.setattr(recent, "_after_event", "game-ordinary")
+    assert len(recent.c01_bounds(NOW, 1, 120, 1000)[2]) == 1000
+    assert [r[0] for r in recent.c06_game_bounds(NOW, 24, 1)] == ["game-resolved"]
+
+
+@pytest.mark.parametrize("initial_ended", [False, None])
+def test_game_follow_final_score_only_without_events(
+    database, monkeypatch, client, capsys, initial_ended
+):
+    seed_game(database, "game-final", ["ma-z", "ma-a"], ended=initial_ended)
+    full.c02_publish([], [], [], 100, datetime.now(UTC) + timedelta(days=1))
+    before = database.execute(
+        "SELECT slug,teams,sport,in_current_scan,closed FROM m_live.m01_event WHERE event_id='game-final'"
+    ).fetchone()
+    final = copy.deepcopy(SPORT)
+    final.update(id="game-final", updatedAt=(NOW + timedelta(hours=1)).isoformat(), ended=True)
+    # The score-only embedded object needs no tags, market list, teams or sport.
+    embedded = {k: v for k, v in final.items() if k in FIELDS[:9] or k in ("id", "updatedAt")}
+    calls = []
+
+    def request(method, url, **kwargs):
+        assert url.endswith("/markets")
+        calls.append(kwargs["params"]["id"])
+        result = [{"id": "ma-a", "events": [embedded]}]
         client.requests += 1
-        client.response_bytes += size
-        sizes.append(size)
+        client.response_bytes += len(json.dumps(result).encode())
         return result
 
     monkeypatch.setattr(client, "request", request)
-    recent.c03_parse(client, {ordinary["id"]: ordinary, extra_market["id"]: extra_market}, 100)
-    report = next(
+    monkeypatch.setattr(recent, "s01_scan", lambda *a: [])
+    assert (
+        recent.runtime_gamma_recent(
+            client,
+            page_size=100,
+            max_pages=20,
+            overlap_seconds=120,
+            lookback_hours=1,
+            follow_limit=1000,
+            event_batch=100,
+            write_batch=1000,
+            game_follow_hours=24,
+            game_follow_max=500,
+        )
+        == Result.COMPLETE
+    )
+    assert calls == [["ma-a"]]
+    assert database.execute(
+        "SELECT score,ended FROM m_live.m01_event WHERE event_id='game-final'"
+    ).fetchone() == (final["score"], True)
+    assert (
+        database.execute(
+            "SELECT slug,teams,sport,in_current_scan,closed FROM m_live.m01_event WHERE event_id='game-final'"
+        ).fetchone()
+        == before
+    )
+    assert recent.c06_game_bounds(datetime.now(UTC), 24, 500) == []
+    log = next(
         json.loads(line)
         for line in capsys.readouterr().out.splitlines()
-        if json.loads(line)["event"] == "parent_enrichment"
+        if json.loads(line)["event"] == "game_follow"
     )
-    assert report["requests"] == (1 if shared_parent else 2)
-    assert report["additional_requests"] == int(not shared_parent)
-    assert report["additional_response_bytes"] == (0 if shared_parent else sizes[-1])
+    assert log["events"] == log["returned"] == log["requests"] == 1 and log["response_bytes"] > 0
 
 
-def test_recent_does_not_refetch_discovered_unfinished_market(monkeypatch, client, capsys):
-    source = SPORT["markets"][0] | {"_web_seen_at": NOW}
-    monkeypatch.setattr(recent, "s01_scan", lambda *a: [source])
-    ids_seen = []
-    monkeypatch.setattr(recent, "s02_follow", lambda ips, ids, size: ids_seen.extend(ids) or [])
-    recent.c02_fetch(client, NOW, NOW, [(source["id"], True, False, True)], 100, 20)
-    assert ids_seen == []
-    report = json.loads(capsys.readouterr().out)
-    assert report["markets"] == report["requests"] == report["response_bytes"] == 0
+@pytest.mark.parametrize("race", ["source", "publication", "ended", "expiry"])
+def test_game_publish_rechecks_newer_rows_and_lifetime(database, monkeypatch, client, race):
+    seed_game(database, "game-race", ["mr"])
+    final = {k: v for k, v in SPORT.items() if k in FIELDS[:9]}
+    final.update(id="game-race", updatedAt=(NOW + timedelta(hours=1)).isoformat())
+    monkeypatch.setattr(client, "request", lambda *a, **k: [{"id": "mr", "events": [final]}])
+    rows = recent.c07_fetch_games(client, recent.c06_game_bounds(NOW, 24, 500), 100)
+    if race == "source":
+        database.execute(
+            "UPDATE m_live.m01_event SET source_updated_at=%s WHERE event_id='game-race'",
+            (NOW + timedelta(hours=2),),
+        )
+    elif race == "publication":
+        database.execute(
+            "UPDATE m_live.m01_event SET m_live_updated_at=%s WHERE event_id='game-race'",
+            (datetime.now(UTC) + timedelta(seconds=1),),
+        )
+    elif race == "ended":
+        database.execute("UPDATE m_live.m01_event SET ended=true WHERE event_id='game-race'")
+    else:
+        database.execute(
+            "UPDATE m_live.m01_market SET closed_time=%s WHERE market_id='mr'",
+            (NOW - timedelta(hours=25),),
+        )
+    assert recent.c08_publish_games(rows, 24, 1000) == 0
+    assert database.execute(
+        "SELECT score FROM m_live.m01_event WHERE event_id='game-race'"
+    ).fetchone() == ("1-2",)
+
+
+def test_game_follow_batches_nullable_fields_and_identity(monkeypatch, client):
+    games = [(f"e{i}", f"m{i}", NOW) for i in range(201)]
+    calls = []
+
+    def request(method, url, **kwargs):
+        assert url.endswith("/markets")
+        ids = kwargs["params"]["id"]
+        calls.append(ids)
+        return [{"id": m, "events": [{"id": "e" + m[1:], "score": ""}]} for m in ids]
+
+    monkeypatch.setattr(client, "request", request)
+    rows = recent.c07_fetch_games(client, games, 100)
+    assert [len(x) for x in calls] == [100, 100, 1]
+    assert rows[0][1:10] == (None, None, None, "", None, None, None, None, None)
+    monkeypatch.setattr(
+        client, "request", lambda *a, **k: [{"id": "m0", "events": [{"id": "wrong"}]}]
+    )
+    with pytest.raises(ContractError, match="unexpected parent"):
+        recent.c07_fetch_games(client, games[:1], 100)
