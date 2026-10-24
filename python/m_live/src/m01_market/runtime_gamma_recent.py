@@ -2,7 +2,7 @@
 
 import json
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from psycopg.types.json import Jsonb
@@ -45,18 +45,32 @@ def c01_bounds(started: datetime, lookback: int, overlap: int, maximum: int) -> 
             "SELECT max(created_at), max(closed_time) FROM m_live.m01_market"
         ).fetchone()
         follow = connection.execute(
-            """SELECT market_id, closed, in_current_scan FROM m_live.m01_market
-            WHERE ((closed AND resolution_status IS DISTINCT FROM 'resolved')
-                OR (NOT closed AND NOT in_current_scan)) AND market_id > %s
-            ORDER BY market_id LIMIT %s""",
+            """SELECT m.market_id, m.closed, m.in_current_scan,
+                (m.closed AND m.resolution_status='resolved') AS unfinished_game
+            FROM m_live.m01_market m
+            JOIN m_live.m01_event e ON e.event_id=m.event_id
+            WHERE ((m.closed AND m.resolution_status IS DISTINCT FROM 'resolved')
+                OR (NOT m.closed AND NOT m.in_current_scan)
+                OR (m.closed AND e.ended IS DISTINCT FROM TRUE
+                    AND (e.game_id IS NOT NULL OR e.game_start_at IS NOT NULL)
+                    AND e.tags @> '[{"slug":"sports"}]'::jsonb))
+                AND m.market_id > %s
+            ORDER BY m.market_id LIMIT %s""",
             (_after_market, maximum),
         ).fetchall()
         if len(follow) < maximum and _after_market:
             follow += connection.execute(
-                """SELECT market_id, closed, in_current_scan FROM m_live.m01_market
-                WHERE ((closed AND resolution_status IS DISTINCT FROM 'resolved')
-                    OR (NOT closed AND NOT in_current_scan)) AND market_id <= %s
-                ORDER BY market_id LIMIT %s""",
+                """SELECT m.market_id, m.closed, m.in_current_scan,
+                (m.closed AND m.resolution_status='resolved') AS unfinished_game
+            FROM m_live.m01_market m
+            JOIN m_live.m01_event e ON e.event_id=m.event_id
+                WHERE ((m.closed AND m.resolution_status IS DISTINCT FROM 'resolved')
+                    OR (NOT m.closed AND NOT m.in_current_scan)
+                    OR (m.closed AND e.ended IS DISTINCT FROM TRUE
+                    AND (e.game_id IS NOT NULL OR e.game_start_at IS NOT NULL)
+                    AND e.tags @> '[{"slug":"sports"}]'::jsonb))
+                    AND m.market_id <= %s
+                ORDER BY m.market_id LIMIT %s""",
                 (_after_market, maximum - len(follow)),
             ).fetchall()
     return (
@@ -76,7 +90,18 @@ def c02_fetch(
         ("closedTime", "true", closed),
     ):
         records.extend(s01_scan(ips, order, state, lower, page_size, max_pages))
-    records.extend(s02_follow(ips, [r[0] for r in follow], page_size))
+    ordinary = [r[0] for r in follow if not r[3]]
+    unfinished = [r[0] for r in follow if r[3]]
+    records.extend(s02_follow(ips, ordinary, page_size))
+    requests_before, bytes_before = ips.requests, ips.response_bytes
+    records.extend(s02_follow(ips, unfinished, page_size))
+    h_log(
+        "runtime_gamma_recent",
+        "unfinished_games_follow",
+        markets=len(unfinished),
+        requests=ips.requests - requests_before,
+        response_bytes=ips.response_bytes - bytes_before,
+    )
     markets, first_resolved = {}, {}
     for market in records:
         status = market.get(
@@ -181,7 +206,7 @@ def s02_follow(ips: IPPool, ids: list[str], size: int) -> list[dict]:
 
 
 def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list]:
-    parents, event_ids = {}, set()
+    parents, event_ids, sports_only = {}, set(), set()
     market_parents = {}
     for market_id, market in raw.items():
         embedded = market.get("events")
@@ -191,37 +216,77 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         event_id = s05_text(event.get("id"), True)
         event_ids.add(event_id)
         market_parents[market_id] = event_id
-        if isinstance(event.get("tags"), list) and isinstance(event.get("markets"), list):
+        complete = isinstance(event.get("tags"), list) and isinstance(event.get("markets"), list)
+        sports = complete and any(t.get("slug") == "sports" for t in event["tags"])
+        sports_fields = (
+            "gameId",
+            "startTime",
+            "eventDate",
+            "score",
+            "period",
+            "elapsed",
+            "live",
+            "ended",
+            "finishedTimestamp",
+            "teams",
+            "sport",
+        )
+        if complete and sports and not all(field in event for field in sports_fields):
+            sports_only.add(event_id)
+        if complete and (not sports or all(field in event for field in sports_fields)):
             parents[event_id] = event
     missing = sorted(event_ids - parents.keys())
-    for start in range(0, len(missing), batch_size):
-        batch = missing[start : start + batch_size]
-        response = ips.request(
-            "GET",
-            "https://gamma-api.polymarket.com/events",
-            params={
-                "id": batch,
-                "closed": "any",
-                "limit": batch_size,
-                "version": ["v1", "v2"],
-                "_lac_ts": str(time.time_ns()),
-            },
-            target=batch,
-        )
-        if not isinstance(response, list) or any(
-            not isinstance(event, dict) or "id" not in event for event in response
-        ):
-            raise ContractError("Invalid Gamma event batch")
-        returned = {str(event["id"]) for event in response}
-        if not returned.issubset(batch) or len(returned) != len(response):
-            raise ContractError("Gamma event batch returned unexpected/duplicate parents")
-        absent = sorted(set(batch) - returned)
-        if absent:
-            h_log("runtime_gamma_recent", "parents_unavailable", level="warning", event_ids=absent)
-        for event in response:
-            if event.get("tags") is not None and not isinstance(event["tags"], list):
-                raise ContractError("Gamma parent lookup lacks tags; design review required")
-            parents[str(event["id"])] = event
+    requests_before, bytes_before = ips.requests, ips.response_bytes
+    additional_requests = additional_bytes = 0
+    # Keep sports-only supplements separate so their actual HTTP cost is measurable.
+    for additional, group in (
+        (False, sorted(set(missing) - sports_only)),
+        (True, sorted(set(missing) & sports_only)),
+    ):
+        group_requests, group_bytes = ips.requests, ips.response_bytes
+        for start in range(0, len(group), batch_size):
+            batch = group[start : start + batch_size]
+            response = ips.request(
+                "GET",
+                "https://gamma-api.polymarket.com/events",
+                params={
+                    "id": batch,
+                    "closed": "any",
+                    "limit": batch_size,
+                    "version": ["v1", "v2"],
+                    "_lac_ts": str(time.time_ns()),
+                },
+                target=batch,
+            )
+            if not isinstance(response, list) or any(
+                not isinstance(event, dict) or "id" not in event for event in response
+            ):
+                raise ContractError("Invalid Gamma event batch")
+            returned = {str(event["id"]) for event in response}
+            if not returned.issubset(batch) or len(returned) != len(response):
+                raise ContractError("Gamma event batch returned unexpected/duplicate parents")
+            absent = sorted(set(batch) - returned)
+            if absent:
+                h_log(
+                    "runtime_gamma_recent", "parents_unavailable", level="warning", event_ids=absent
+                )
+            for event in response:
+                if event.get("tags") is not None and not isinstance(event["tags"], list):
+                    raise ContractError("Gamma parent lookup lacks tags; design review required")
+                parents[str(event["id"])] = event
+        if additional:
+            additional_requests += ips.requests - group_requests
+            additional_bytes += ips.response_bytes - group_bytes
+    h_log(
+        "runtime_gamma_recent",
+        "parent_enrichment",
+        parents=len(missing),
+        sports_only_parents=len(set(missing) & sports_only),
+        additional_requests=additional_requests,
+        additional_response_bytes=additional_bytes,
+        requests=ips.requests - requests_before,
+        response_bytes=ips.response_bytes - bytes_before,
+    )
     observed = datetime.now(UTC)
     events, markets, outcomes, ordinals = [], [], [], {}
     for event_id in sorted(parents):
@@ -237,7 +302,11 @@ def c03_parse(ips: IPPool, raw: dict, batch_size: int) -> tuple[list, list, list
         if market_id not in ordinals[event_id]:
             raise ContractError("Gamma market missing from its parent lookup")
         row, results = s04_market(
-            raw[market_id], event_id, ordinals[event_id][market_id], raw[market_id]["_web_seen_at"]
+            raw[market_id],
+            event_id,
+            ordinals[event_id][market_id],
+            raw[market_id]["_web_seen_at"],
+            sports=any(t.get("slug") == "sports" for t in (parents[event_id].get("tags") or [])),
         )
         markets.append(row)
         outcomes.extend(results)
@@ -259,7 +328,7 @@ def s03_event(event: dict, observed: datetime) -> tuple:
         }
         for t in tags
     ]
-    return (
+    row = (
         s05_text(event.get("id"), True),
         s05_text(event.get("slug"), True),
         s05_text(event.get("title"), True),
@@ -280,9 +349,26 @@ def s03_event(event: dict, observed: datetime) -> tuple:
         True,
         observed,
     )
+    if not any(t["slug"] == "sports" for t in tags):
+        return row + (None,) * 11
+    return row + (
+        s10_raw_text(event.get("gameId"), identifier=True),
+        s08_date(event.get("startTime")),
+        s11_day(event.get("eventDate")),
+        s10_raw_text(event.get("score")),
+        s10_raw_text(event.get("period")),
+        s10_raw_text(event.get("elapsed")),
+        s06_bool(event.get("live"), True),
+        s06_bool(event.get("ended"), True),
+        s08_date(event.get("finishedTimestamp")),
+        s12_object(event.get("teams"), list),
+        s12_object(event.get("sport"), dict),
+    )
 
 
-def s04_market(market: dict, event_id: str, ordinal: int, observed: datetime) -> tuple:
+def s04_market(
+    market: dict, event_id: str, ordinal: int, observed: datetime, *, sports: bool = False
+) -> tuple:
     market_id = s05_text(market.get("id"), True)
     version = market.get("version")
     if version not in ("v1", "v2"):
@@ -343,6 +429,14 @@ def s04_market(market: dict, event_id: str, ordinal: int, observed: datetime) ->
         status,
         observed if status == "resolved" else None,
     )
+    if sports:
+        row += (
+            s10_raw_text(market.get("sportsMarketType")),
+            s13_line(market.get("line")),
+            s14_statuses(market.get("umaResolutionStatuses")),
+        )
+    else:
+        row += (None, None, None)
     return row, results
 
 
@@ -381,7 +475,7 @@ def s08_date(value) -> datetime | None:
         return None
     try:
         result = datetime.fromisoformat(value)
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, TypeError):
         raise ContractError("Invalid Gamma timestamp") from None
     if result.tzinfo is None:
         raise ContractError("Gamma timestamp has no timezone")
@@ -400,6 +494,66 @@ def s09_array(value, optional: bool) -> list:
     return array
 
 
+def s10_raw_text(value, *, identifier: bool = False) -> str | None:
+    """Preserve empty sports text; only gameId may arrive as an integer."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if identifier and type(value) is int:
+        return str(value)
+    raise ContractError("Invalid Gamma sports text/ID type")
+
+
+def s11_day(value) -> date | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ContractError("Invalid Gamma game date")
+    try:
+        result = date.fromisoformat(value)
+    except ValueError:
+        raise ContractError("Invalid Gamma game date") from None
+    if result.isoformat() != value:
+        raise ContractError("Gamma game date must be YYYY-MM-DD")
+    return result
+
+
+def s12_object(value, kind: type) -> Jsonb | None:
+    if value is None:
+        return None
+    if not isinstance(value, kind) or (
+        kind is list and any(not isinstance(team, dict) for team in value)
+    ):
+        raise ContractError("Invalid Gamma teams/sport type")
+    return Jsonb(value)
+
+
+def s13_line(value) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise ContractError("Invalid Gamma sports line type")
+    result = Decimal(str(value))
+    if not result.is_finite():
+        raise ContractError("Gamma sports line must be finite")
+    return result
+
+
+def s14_statuses(value) -> Jsonb | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ContractError("Gamma UMA statuses must be a JSON encoded string")
+    try:
+        result = json.loads(value)
+    except ValueError:
+        raise ContractError("Invalid Gamma UMA statuses JSON") from None
+    if not isinstance(result, list) or any(not isinstance(v, str) for v in result):
+        raise ContractError("Gamma UMA statuses must encode a text array")
+    return Jsonb(result)
+
+
 def c04_publish(
     events: list[tuple],
     markets: list[tuple],
@@ -411,7 +565,7 @@ def c04_publish(
     markets = sorted(markets, key=lambda r: r[0])
     event_ids, market_ids = [r[0] for r in events], [r[0] for r in markets]
     published = datetime.now(UTC)
-    events = [r[:18] + (published,) for r in events]
+    events = [r[:18] + (published,) + r[19:] for r in events]
     markets = [r[:24] + (published,) + r[25:] for r in markets]
     with h_connect() as connection:
         # Both writers acquire existing rows in the same event -> market order.
@@ -426,7 +580,8 @@ def c04_publish(
             """INSERT INTO m_live.m01_event
             (event_id, slug, title, description, resolution_source, image_url, icon_url, start_at,
              end_at, active, closed, archived, volume_total, volume_24h, liquidity, tags,
-             source_updated_at, in_current_scan, m_live_updated_at) VALUES """,
+             source_updated_at, in_current_scan, m_live_updated_at,
+             game_id, game_start_at, game_date, score, period, elapsed, live, ended, game_finished_at, teams, sport) VALUES """,
             """
             ON CONFLICT (event_id) DO UPDATE SET slug=EXCLUDED.slug, title=EXCLUDED.title,
             description=EXCLUDED.description, resolution_source=EXCLUDED.resolution_source,
@@ -434,7 +589,18 @@ def c04_publish(
             end_at=EXCLUDED.end_at, active=EXCLUDED.active, closed=EXCLUDED.closed,
             archived=EXCLUDED.archived, volume_total=EXCLUDED.volume_total, volume_24h=EXCLUDED.volume_24h,
             liquidity=EXCLUDED.liquidity, tags=EXCLUDED.tags, source_updated_at=EXCLUDED.source_updated_at,
-            in_current_scan=m01_event.in_current_scan, m_live_updated_at=EXCLUDED.m_live_updated_at
+            in_current_scan=m01_event.in_current_scan, m_live_updated_at=EXCLUDED.m_live_updated_at,
+            game_id=EXCLUDED.game_id,
+            game_start_at=EXCLUDED.game_start_at,
+            game_date=EXCLUDED.game_date,
+            score=EXCLUDED.score,
+            period=EXCLUDED.period,
+            elapsed=EXCLUDED.elapsed,
+            live=EXCLUDED.live,
+            ended=EXCLUDED.ended,
+            game_finished_at=EXCLUDED.game_finished_at,
+            teams=EXCLUDED.teams,
+            sport=EXCLUDED.sport
             WHERE m01_event.source_updated_at IS NULL
                OR EXCLUDED.source_updated_at >= m01_event.source_updated_at""",
             events,
@@ -449,7 +615,7 @@ def c04_publish(
         accepted = set()
         for start in range(0, len(markets), batch):
             rows = markets[start : start + batch]
-            values = ",".join(["(" + ",".join(["%s"] * 29) + ")"] * len(rows))
+            values = ",".join(["(" + ",".join(["%s"] * 32) + ")"] * len(rows))
             accepted.update(
                 r[0]
                 for r in connection.execute(
@@ -457,7 +623,8 @@ def c04_publish(
                 (market_id,event_id,sort_order,condition_id,protocol_version,slug,question,group_title,
                  description,resolution_source,image_url,icon_url,start_at,end_at,active,closed,archived,
                  accepting_orders,enable_order_book,volume_total,volume_24h,liquidity,source_updated_at,
-                 in_current_scan,m_live_updated_at,created_at,closed_time,resolution_status,resolved_seen_at)
+                 in_current_scan,m_live_updated_at,created_at,closed_time,resolution_status,resolved_seen_at,
+                 sports_market_type,line,uma_resolution_statuses)
                 VALUES """
                     + values
                     + """ ON CONFLICT (market_id) DO UPDATE SET
@@ -472,7 +639,9 @@ def c04_publish(
                 source_updated_at=EXCLUDED.source_updated_at,in_current_scan=m01_market.in_current_scan,
                 m_live_updated_at=EXCLUDED.m_live_updated_at,created_at=EXCLUDED.created_at,
                 closed_time=EXCLUDED.closed_time,resolution_status=EXCLUDED.resolution_status,
-                resolved_seen_at=COALESCE(m01_market.resolved_seen_at,EXCLUDED.resolved_seen_at)
+                resolved_seen_at=COALESCE(m01_market.resolved_seen_at,EXCLUDED.resolved_seen_at),
+                sports_market_type=EXCLUDED.sports_market_type,line=EXCLUDED.line,
+                uma_resolution_statuses=EXCLUDED.uma_resolution_statuses
                 WHERE m01_market.source_updated_at IS NULL
                    OR EXCLUDED.source_updated_at >= m01_market.source_updated_at
                 RETURNING market_id""",

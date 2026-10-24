@@ -39,7 +39,11 @@ def test_recent_missing_parent_skips_only_its_markets_and_warns(monkeypatch, cap
     assert [event[0] for event in events] == [EVENT["id"]]
     assert [market[0] for market in markets] == [available["id"]]
     assert {outcome[0] for outcome in outcomes} == {available["id"]}
-    warning = json.loads(capsys.readouterr().out)
+    warning = next(
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if json.loads(line)["event"] == "parents_unavailable"
+    )
     assert warning["event"] == "parents_unavailable"
     assert warning["level"] == "warning" and warning["event_ids"] == ["missing-parent"]
     client.close()
@@ -104,7 +108,7 @@ def test_source_guard_outcomes_and_first_resolved_seen(database, writer):
     first = database.execute(
         "SELECT resolved_seen_at FROM m_live.m01_market WHERE market_id=%s", (market[0],)
     ).fetchone()[0]
-    writer([event_row], [market[:28] + (NOW + timedelta(seconds=20),)], outcomes, 100)
+    writer([event_row], [market[:28] + (NOW + timedelta(seconds=20),) + market[29:]], outcomes, 100)
     assert (
         database.execute(
             "SELECT resolved_seen_at FROM m_live.m01_market WHERE market_id=%s", (market[0],)
@@ -192,8 +196,8 @@ def test_cold_bounds_and_follow_rotation(monkeypatch):
     assert created == closed == NOW - timedelta(hours=1) and not follow
     connection.execute.return_value.fetchone.return_value = (NOW, NOW)
     connection.execute.return_value.fetchall.side_effect = [
-        [("z", False, False)],
-        [("a", True, False)],
+        [("z", False, False, False)],
+        [("a", True, False, False)],
     ]
     monkeypatch.setattr(recent, "_after_market", "m")
     created, closed, follow = recent.c01_bounds(NOW, 1, 120, 2)

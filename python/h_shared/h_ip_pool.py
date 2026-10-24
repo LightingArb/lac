@@ -111,7 +111,7 @@ class IPPool:
         self.reset_round()
 
     def reset_round(self) -> None:
-        self.requests = self.success = self.no_data = self.errors = 0
+        self.requests = self.success = self.no_data = self.errors = self.response_bytes = 0
 
     def report(self, *, success: int = 0, no_data: int = 0, error: int = 0) -> None:
         with self.condition:
@@ -268,6 +268,8 @@ class IPPool:
                         content.extend(chunk)
                         if len(content) > self.policy.max_response_bytes:
                             raise ContractError("Provider response exceeds declared byte limit")
+                    with self.condition:
+                        self.response_bytes += len(content)
                     try:
                         return json.loads(content, parse_float=Decimal)
                     except (ValueError, UnicodeError):

@@ -17,7 +17,18 @@ CREATE TABLE m_live.m01_event (
     tags JSONB NOT NULL,
     source_updated_at TIMESTAMPTZ,
     in_current_scan BOOLEAN NOT NULL,
-    m_live_updated_at TIMESTAMPTZ NOT NULL
+    m_live_updated_at TIMESTAMPTZ NOT NULL,
+    game_id TEXT,
+    game_start_at TIMESTAMPTZ,
+    game_date DATE,
+    score TEXT,
+    period TEXT,
+    elapsed TEXT,
+    live BOOLEAN,
+    ended BOOLEAN,
+    game_finished_at TIMESTAMPTZ,
+    teams JSONB,
+    sport JSONB
 );
 CREATE INDEX market_event_ranking ON m_live.m01_event (volume_24h DESC NULLS LAST, event_id)
 WHERE in_current_scan AND active AND NOT closed AND NOT archived;
@@ -50,7 +61,11 @@ CREATE TABLE m_live.m01_market (
     created_at TIMESTAMPTZ,
     closed_time TIMESTAMPTZ,
     resolution_status TEXT,
-    resolved_seen_at TIMESTAMPTZ
+    resolved_seen_at TIMESTAMPTZ,
+    sports_market_type TEXT,
+    -- Approved public column name.
+    line NUMERIC, -- noqa: RF04
+    uma_resolution_statuses JSONB
 );
 CREATE INDEX market_market_event ON m_live.m01_market (event_id, sort_order, market_id);
 CREATE TABLE m_live.m01_outcome (

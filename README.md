@@ -235,9 +235,10 @@ flowchart LR
 
 - 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
 - **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；整本掛單簿預設每 300 秒，產品要求深度時依需求間隔；歷史每分鐘一格、每日一列，常駐補最近 7 個完整 UTC 日。
-- **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查。
+- **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查；體育議題缺少完整比賽欄位時共用這次查詢，只有已附完整標籤與市場清單、卻缺比賽欄位的體育議題才另外加入補查。已關閉且已定案的體育市場，若議題有 `game_id` 或 `game_start_at`，且 `ended` 不是 true，也繼續輪替追蹤。來源未提供 ended 時如實保留 null 並持續追蹤；只有來源回報比賽結束才停止這項補查。
 - **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描只撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。identity 與結算永久保留。
 - **結算：** resolution_status 原樣存 v1 的 umaResolutionStatus 或 v2 的 resolutionStatus；只有 resolved 才寫各 outcome 的 resolved_price，包含 0.5／0.5。closed 或 1／0 價格本身不代表定案。resolved_seen_at 是 Web 首次看到 resolved 的時間，只寫一次；這是 Gamma 回報的結算，沒有宣稱鏈上付款已驗證。
+- **體育比賽資料：** 以議題的 `sports` 標籤辨識，full 與 recent 都按 Polymarket 原值保存。比賽中的比分跟隨 600 秒全掃；比賽／市場關閉後由 recent 補到最終狀態，資料永久保留。比分倒退也照存，不修正、不推論勝負；缺少或 JSON null 存 SQL null，文字空字串保留，缺省布林不當 false。非體育議題及其市場的體育欄位是 null。`ended` 缺省代表來源未提供，不宣稱已取得最終比分；不另存無可靠來源的原訂開賽時間。
 - **Gamma IP 額度：** 每 IP 在途 4；recent 的 markets 300／10 秒、events 100／10 秒，full 的 events 400／10 秒；keyset 算在同名列表額度內。來源：[Polymarket Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)。demand 沒有 HTTP 額度，也不能發出 HTTP。
 - **層級：** 議題（event）→ 市場（market，畫面上的一個選項列）→ 結果（outcome，例如 Yes 與 No，各有自己的 `asset_id` 與價格）。
 - **價格怎麼讀：**
@@ -269,6 +270,14 @@ flowchart LR
 | source_updated_at              | timestamptz? | Polymarket 最後修改時間                      |
 | in_current_scan                | boolean      | 是否屬於目前掃描範圍（含 recent 新增）                   |
 | m_live_updated_at                    | timestamptz  | 此筆現況資料發布的時間                       |
+| game_id | text? | Gamma gameId；保留來源編號，不當成 event_id |
+| game_start_at | timestamptz? | startTime，目前排定開賽時間；不是 start_at／end_at |
+| game_date | date? | eventDate，比賽日期原值 |
+| score、period、elapsed | text? | 比分、節次／階段、比賽時鐘；不解析或修正字串 |
+| live、ended | boolean? | 來源回報的進行中／已結束；null 表示未提供 |
+| game_finished_at | timestamptz? | finishedTimestamp，來源回報實際結束時間 |
+| teams | jsonb? | 兩隊或球員的資料陣列，保留原順序；不假定左邊是主隊 |
+| sport | jsonb? | 聯盟／運動資料物件原值 |
 
 **`m_live.m01_market`**：一列＝一個市場（畫面上的一個選項列）；主鍵 `market_id`。
 
@@ -290,6 +299,9 @@ flowchart LR
 | closed_time                                     | timestamptz? | Gamma closedTime 的原時間，轉存 UTC；不是鏈上付款時間 |
 | resolution_status                               | text? | 依版本選取的原始結算狀態；缺值就是 null |
 | resolved_seen_at                                | timestamptz? | Web 第一次看到 resolved；之後不改 |
+| sports_market_type | text? | sportsMarketType，勝負／讓分／大小分等來源盤型 |
+| line | numeric? | 來源盤口線；允許負值，不四捨五入 |
+| uma_resolution_statuses | jsonb? | umaResolutionStatuses 的 JSON 字串解析成陣列；原順序保留，空陣列與 null 不同；不是完整爭議事件時間線 |
 | source_updated_at、in_current_scan、m_live_updated_at |              | 同議題表                                                   |
 
 **`m_live.m01_outcome`**：一列＝一個結果；主鍵 `market_id`＋`outcome_index`。
