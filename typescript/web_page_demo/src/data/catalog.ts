@@ -27,6 +27,8 @@ export interface Outcome {
   no: number | null;
   yesAsk?: number | null;
   noAsk?: number | null;
+  yesIndex?: number;
+  noIndex?: number;
   yesAsset?: string | null;
   noAsset?: string | null;
   yesLabel?: string;
@@ -74,6 +76,16 @@ export interface MarketEvent {
   lac: { product: ProductId; path: string } | null;
   rows: Outcome[];
   match?: MatchInfo;
+  liveMatch?: {
+    teams: { name: string | null; abbreviation: string | null }[];
+    score: string | null;
+    live: boolean | null;
+    ended: boolean | null;
+    period: string | null;
+    elapsed: string | null;
+    starts: string;
+    probabilities: (number | null)[] | null;
+  };
 }
 
 export interface Signal {

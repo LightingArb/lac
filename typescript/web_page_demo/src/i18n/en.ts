@@ -105,6 +105,8 @@ export const en = {
     moreOutcomes: (n: number) => `+${n} more outcomes`,
     signalCount: (n: number) => plural(n, 'positive-EV signal', 'positive-EV signals'),
     live: 'LIVE',
+    ended: 'Ended',
+    gameStarts: (at: string) => `Starts ${at}`,
     detail: 'Event detail',
     pickEvent: 'Pick an event to see its markets.',
     share: 'Share event',
@@ -139,7 +141,7 @@ export const en = {
     priceHistory: (title: string) => `Price history for ${title}`,
     noHistory: 'No historical data for this range',
     loadingHistory: 'Loading history…',
-    historyNote: (from: string, to: string) => `History snapshot · ${from} – ${to} UTC · gaps are left empty.`,
+    historyNote: (from: string, to: string) => `Historical minutes · ${from} – ${to} UTC · complete UTC days only; gaps stay empty.`,
   },
 
   signals: {

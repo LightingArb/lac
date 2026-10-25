@@ -19,9 +19,17 @@ export interface LiveEvent {
   liquidity: string | null;
   start_at: string | null;
   end_at: string | null;
-  observed_at: string;
+  m_live_updated_at: string;
   tags: { slug: string; label: string }[];
   market_count: number;
+  teams: { name: string | null; abbreviation: string | null }[] | null;
+  score: string | null;
+  live: boolean | null;
+  ended: boolean | null;
+  period: string | null;
+  elapsed: string | null;
+  game_start_at: string | null;
+  moneyline: { outcome_index: number; label: string; midpoint: string | null }[];
   description?: string | null;
   resolution_source?: string | null;
   preview?: LiveOutcome[];
@@ -43,19 +51,17 @@ export interface LiveOutcome {
   best_bid: string | null;
   best_ask: string | null;
   midpoint: string | null;
-  last_trade_price: string | null;
-  quote_observed_at: string | null;
-  mid_observed_at: string | null;
+  requested_at: string | null;
 }
 export interface History {
-  coverage: {
-    status: 'success' | 'error';
-    point_count: number | null;
-    requested_start: string;
-    requested_end: string;
-    checked_at: string;
-  } | null;
-  points: { minute_at: string; source_at: string; price: string; resolution_seconds: number }[];
+  points: { minute_at: string; price: string | null; second_price: string | null }[];
+}
+export interface HistoryResponse {
+  histories: Record<string, History>;
+  firstAt: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  stepMinutes: number;
 }
 export function useLive<T>(url: string | null, refresh = 0) {
   const t = useT();
@@ -129,6 +135,8 @@ export function liveEvent(
       no: number(no?.midpoint),
       yesAsk: number(yes.best_ask),
       noAsk: number(no?.best_ask),
+      yesIndex: yes.outcome_index,
+      noIndex: no?.outcome_index,
       yesAsset: yes.asset_id,
       noAsset: no?.asset_id ?? null,
       yesLabel: yes.label,
@@ -148,7 +156,7 @@ export function liveEvent(
     imageUrl: event.image_url,
     tags: event.tags.map((tag) => tag.label),
     marketCount,
-    observedAt: event.observed_at,
+    observedAt: event.m_live_updated_at,
     open: date(event.start_at, { month: 'short', day: 'numeric' }, locale),
     start: date(event.start_at, { dateStyle: 'medium', timeStyle: 'short' }, locale) + (event.start_at ? ' UTC' : ''),
     end: date(event.end_at, { dateStyle: 'medium', timeStyle: 'short' }, locale) + (event.end_at ? ' UTC' : ''),
@@ -160,7 +168,27 @@ export function liveEvent(
     yesLabel: rows[0]?.yesLabel,
     noLabel: rows[0]?.noLabel,
     rows,
+    liveMatch: liveMatch(event, locale),
     lac: null,
+  };
+}
+
+/** Team names must match the unique open moneyline exactly; order stays with teams. */
+export function liveMatch(event: LiveEvent, locale = 'en-US'): MarketEvent['liveMatch'] {
+  if (event.teams?.length !== 2) return undefined;
+  const moneyline = event.moneyline;
+  const names = event.teams.map((team) => team.name);
+  const matched = moneyline.length === 2 && names[0] !== names[1] &&
+    names.every((name) => name !== null && moneyline.filter((outcome) => outcome.label === name).length === 1);
+  return {
+    teams: event.teams,
+    score: event.score,
+    live: event.live,
+    ended: event.ended,
+    period: event.period,
+    elapsed: event.elapsed,
+    starts: date(event.game_start_at, { dateStyle: 'medium', timeStyle: 'short' }, locale) + (event.game_start_at ? ' UTC' : ''),
+    probabilities: matched ? names.map((name) => number(moneyline.find((outcome) => outcome.label === name)!.midpoint)) : null,
   };
 }
 

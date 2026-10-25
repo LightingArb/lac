@@ -17,13 +17,14 @@ npm run dev
 
 ```bash
 npm test
+npm run test:db  # 本機 lac_data：唯讀 SELECT，測 SQL numeric、歷史分桶與 moneyline
 npm run build
 ```
 
 - `npm test`：Live 欄位對應、缺值、結果順序、分成與推薦碼規則、提領流程、後台產品版本與權益規則、中英文鍵值是否一致。
 - `npm run build`：TypeScript 檢查與 Vite 靜態輸出，結果在 `dist/`。
 - `npm run build:static`：輸出單一檔案 `dist-static/index.html`（JS、CSS 都包在裡面，路由用 `#/`），不用伺服器就能打開或分享；這個版本只有 Demo。
-- `tests/live_event.json`：本機 Live reader 的實際回應 fixture；僅供測試，不代表目前行情。
+- `tests/live_event.json`：以新表讀取程式於 2026-10-25 07:15:34 UTC 從本機 `lac_data` 取得 `/api/live/event?id=878226`（Russia x Ukraine any diplomatic meeting by...?）的實際回應；僅供測試，不代表目前行情。原始回應、查詢與逐點比對在 `/home/admin/research/web/web_page_demo_live/`。
 
 ## 程式導覽
 

@@ -4,7 +4,7 @@ import { useT } from '../../i18n';
 import { chance, cents, multiplier } from '../../lib/format';
 import { Icon } from '../ui/Icon';
 import { EventBadge } from './EventBadge';
-import { LiveIndicator, TeamAvatar } from './MatchParts';
+import { LiveIndicator, TeamAvatar, LiveMatchBoard } from './MatchParts';
 import styles from './EventCard.module.css';
 
 interface EventCardProps {
@@ -40,7 +40,12 @@ export function EventCard({ event, selected, showPath, signalCount, onSelect }: 
         </span>
       </span>
 
-      {event.match ? <MatchPreview event={event} /> : <OutcomePreview event={event} />}
+      {event.liveMatch ? (
+        <>
+          <LiveMatchBoard match={event.liveMatch} />
+          {!event.liveMatch.probabilities && <OutcomePreview event={event} />}
+        </>
+      ) : event.match ? <MatchPreview event={event} /> : <OutcomePreview event={event} />}
 
       {signalCount > 0 && (
         <span className={styles.signals}>

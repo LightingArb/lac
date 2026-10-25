@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 const result = await build({
   entryPoints: [fileURLToPath(new URL('./presentation.test.ts', import.meta.url))],
   bundle: true,
+  loader: { '.css': 'empty', '.module.css': 'empty' },
+  define: { 'import.meta.env.MODE': '"test"' },
   platform: 'node',
   format: 'cjs',
   write: false,

@@ -125,6 +125,8 @@ export const zh: Messages = {
     moreOutcomes: (n) => `還有 ${n} 個選項`,
     signalCount: (n) => `${n} 個正 EV 訊號`,
     live: '進行中',
+    ended: '已結束',
+    gameStarts: (at) => `開賽時間 ${at}`,
     detail: '事件詳情',
     pickEvent: '選一個事件，就會顯示它的市場。',
     share: '分享事件',
@@ -158,7 +160,7 @@ export const zh: Messages = {
     priceHistory: (title) => `${title} 的價格走勢`,
     noHistory: '這段區間沒有歷史資料',
     loadingHistory: '正在載入歷史資料…',
-    historyNote: (from, to) => `歷史快照 · ${from} – ${to} UTC · 沒資料的時段留白。`,
+    historyNote: (from, to) => `歷史分鐘資料 · ${from} – ${to} UTC · 只含完整 UTC 日，沒資料的時段留白。`,
   },
 
   signals: {

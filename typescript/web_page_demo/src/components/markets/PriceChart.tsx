@@ -3,7 +3,8 @@ import type { MarketEvent } from '../../data/catalog';
 import { useT, type Messages } from '../../i18n';
 import { chance } from '../../lib/format';
 import { priceSeries } from '../../lib/series';
-import { useLive, type History } from '../../lib/live';
+import { historyPath } from '../../lib/history';
+import { useLive, type HistoryResponse } from '../../lib/live';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import styles from './PriceChart.module.css';
 
@@ -20,7 +21,7 @@ const Y_LABELS = ['100%', '75%', '50%', '25%', '0%'];
 
 interface Line {
   label: string;
-  points: number[];
+  points: (number | null)[];
   end: number | null;
   times?: number[];
   color: string;
@@ -59,33 +60,30 @@ export function PriceChart({ event }: { event: MarketEvent }) {
   const live = event.source === 'live';
   const series =
     event.kind === 'multi'
-      ? event.rows.map((row) => ({ id: row.yesAsset, label: row.label, value: row.yes }))
+      ? event.rows.map((row) => ({ id: row.id, index: row.yesIndex, label: row.label }))
       : [
-          { id: event.rows[0]?.yesAsset, label: t.side(event.yesLabel ?? 'Yes'), value: event.rows[0]?.yes ?? null },
-          { id: event.rows[0]?.noAsset, label: t.side(event.noLabel ?? 'No'), value: event.rows[0]?.no ?? null },
+          { id: event.rows[0]?.id, index: event.rows[0]?.yesIndex, label: t.side(event.yesLabel ?? 'Yes') },
+          { id: event.rows[0]?.id, index: event.rows[0]?.noIndex, label: t.side(event.noLabel ?? 'No') },
         ];
-  const ids = series.flatMap((item) => (item.id ? [item.id] : []));
-  const history = useLive<{ histories: Record<string, History> }>(
-    live && ids.length ? `/api/live/history?ids=${ids.join(',')}` : null,
+  const ids = [...new Set(series.flatMap((item) => item.id ? [item.id] : []))];
+  const history = useLive<HistoryResponse>(
+    live && ids.length ? `/api/live/history?ids=${ids.join(',')}&range=${range}` : null,
   );
-  const windows = Object.values(history.data?.histories ?? {}).flatMap((item) =>
-    item.coverage ? [item.coverage] : [],
-  );
-  const endAt = Math.max(0, ...windows.map((item) => Date.parse(item.requested_end)));
-  const availableStart = Math.min(endAt, ...windows.map((item) => Date.parse(item.requested_start)));
-  const durations = { '1H': 3600000, '6H': 21600000, '1D': 86400000, '1W': 604800000, '1M': 2592000000, ALL: Infinity };
-  const startAt = Math.max(availableStart, endAt - durations[range]);
+  const endAt = history.data?.endAt ? Date.parse(history.data.endAt) : 0;
+  const startAt = history.data?.startAt ? Date.parse(history.data.startAt) : 0;
   const lines: Line[] = live
     ? series.map((item, i) => {
-        const points = (item.id ? (history.data?.histories[item.id]?.points ?? []) : []).filter(
-          (point) => Date.parse(point.minute_at) >= startAt,
-        );
+        const source = item.id ? history.data?.histories[item.id]?.points ?? [] : [];
+        const points = source.map((point) => {
+          const value = item.index === 0 ? point.price : item.index === 1 ? point.second_price : null;
+          return value === null ? null : Number(value);
+        });
         return {
           label: item.label,
-          end: item.value,
+          end: [...points].reverse().find((point) => point !== null) ?? null,
           color: i < SERIES_COLORS.length ? SERIES_COLORS[i] : `hsl(${(i * 137.508) % 360} 65% 40%)`,
-          points: points.map((point) => Number(point.price)),
-          times: points.map((point) => Date.parse(point.minute_at)),
+          points,
+          times: source.map((point) => Date.parse(point.minute_at)),
         };
       })
     : chartLines(event, t);
@@ -126,7 +124,7 @@ export function PriceChart({ event }: { event: MarketEvent }) {
             <span key={top} className={styles.gridLine} style={{ top }} />
           ))}
           <span className={`${styles.gridLine} ${styles.baseline}`} />
-          {live && !lines.some((line) => line.points.length) && (
+          {live && !lines.some((line) => line.points.some((point) => point !== null)) && (
             <span className={styles.empty}>
               {history.error ?? (history.data || !ids.length ? t.chart.noHistory : t.chart.loadingHistory)}
             </span>
@@ -141,12 +139,8 @@ export function PriceChart({ event }: { event: MarketEvent }) {
             >
               {live ? (
                 <path
-                  d={line.points
-                    .map(
-                      (point, i) =>
-                        `${i === 0 || line.times![i] - line.times![i - 1] > 90000 ? 'M' : 'L'}${((line.times![i] - startAt) / Math.max(1, endAt - startAt)) * 100},${(1 - point) * 100}`,
-                    )
-                    .join(' ')}
+                  d={historyPath(line.points, line.times!, startAt, endAt)}
+                  strokeLinecap="round"
                   fill="none"
                   style={{ stroke: line.color }}
                   strokeWidth={2}
@@ -154,7 +148,7 @@ export function PriceChart({ event }: { event: MarketEvent }) {
                 />
               ) : (
                 <polyline
-                  points={toPolyline(line.points.slice(-n))}
+                  points={toPolyline(line.points.slice(-n) as number[])}
                   fill="none"
                   style={{ stroke: line.color }}
                   strokeWidth={2}
@@ -179,7 +173,7 @@ export function PriceChart({ event }: { event: MarketEvent }) {
       </div>
       {live && endAt > 0 && (
         <span className={styles.note}>
-          {t.chart.historyNote(stamp(availableStart), stamp(endAt))}
+          {t.chart.historyNote(stamp(startAt), stamp(endAt))}
         </span>
       )}
     </div>

@@ -1,7 +1,13 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { I18nProvider } from '../src/i18n';
+import { LiveMatchBoard } from '../src/components/markets/MatchParts';
+import { EventCard } from '../src/components/markets/EventCard';
+import { historyPath } from '../src/lib/history';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import sample from './live_event.json';
-import { liveEvent, type LiveEvent, type LiveOutcome } from '../src/lib/live';
+import { liveMatch, liveEvent, type LiveEvent, type LiveOutcome } from '../src/lib/live';
 import { cents, chance, multiplier } from '../src/lib/format';
 import {
   MY_AGENTS,
@@ -29,7 +35,7 @@ import {
   validateDraft,
 } from '../src/data/withdrawals';
 
-// Captured from the local reader on 2026-10-21; evidence: round3/live_event_sample.json.
+// Captured 2026-10-25T07:15:34Z, event 878226, from the local read-only reader.
 test('Live maps each market to its own midpoint, asks, volume and liquidity', () => {
   const mapped = liveEvent(sample.event as LiveEvent, sample.outcomes as LiveOutcome[], sample.marketCount);
   assert.equal(mapped.match, undefined);
@@ -38,9 +44,9 @@ test('Live maps each market to its own midpoint, asks, volume and liquidity', ()
     const source = sample.outcomes.filter((o) => o.market_id === row.id);
     const yes = source.find((o) => o.label === 'Yes')!;
     const no = source.find((o) => o.label === 'No')!;
-    assert.equal(row.yes, Number(yes.midpoint));
-    assert.equal(row.yesAsk, Number(yes.best_ask));
-    assert.equal(row.noAsk, Number(no.best_ask));
+    assert.equal(row.yes, yes.midpoint === null ? null : Number(yes.midpoint));
+    assert.equal(row.yesAsk, yes.best_ask === null ? null : Number(yes.best_ask));
+    assert.equal(row.noAsk, no.best_ask === null ? null : Number(no.best_ask));
     assert.equal(row.liquidity, Number(yes.liquidity));
     assert.equal(row.vol, Number(yes.volume_total));
   }
@@ -181,4 +187,62 @@ test('Back office: publishing keeps old buyers on their version, upgrades and re
     b.activity.slice(0, 6).map((a) => a.kind),
     ['suspended', 'refunded', 'granted', 'upgraded', 'published', 'approvedItem'],
   );
+});
+
+// Synthetic variants exercise presentation branches, not provider parsing.
+const sports = (overrides: Partial<LiveEvent> = {}): LiveEvent => ({
+  ...sample.event, market_count: 1,
+  teams: [{ name: 'Alpha', abbreviation: 'alp' }, { name: 'Beta', abbreviation: 'bet' }],
+  score: '1-3', live: true, ended: false, period: 'Q4', elapsed: '00:03', game_start_at: '2026-10-25T00:00:00Z',
+  moneyline: [{ outcome_index: 0, label: 'Beta', midpoint: '0.25' }, { outcome_index: 1, label: 'Alpha', midpoint: '0.75' }],
+  ...overrides,
+});
+test('Only exactly two teams get a Live scoreboard, preserving source order and raw score', () => {
+  assert.equal(liveMatch(sports({ teams: null })), undefined);
+  assert.equal(liveMatch(sports({ teams: [] })), undefined);
+  assert.equal(liveMatch(sports({ teams: sports().teams!.slice(0, 1) })), undefined);
+  assert.equal(liveMatch(sports({ teams: [...sports().teams!, sports().teams![0]] })), undefined);
+  const match = liveMatch(sports())!;
+  assert.deepEqual(match.teams.map((team) => team.name), ['Alpha', 'Beta']);
+  assert.equal(match.score, '1-3');
+  assert.deepEqual(match.probabilities, [0.75, 0.25]);
+  assert.equal(liveMatch(sports({ score: '' }))!.score, '');
+});
+test('Moneyline needs both exact names; absent, multiple candidates, or mismatched labels use generic options', () => {
+  for (const moneyline of [[], sports().moneyline.slice(0, 1), [...sports().moneyline, ...sports().moneyline],
+    sports().moneyline.map((outcome) => ({ ...outcome, label: outcome.label.toLowerCase() }))]) {
+    const event = sports({ moneyline });
+    assert.equal(liveMatch(event)!.probabilities, null);
+    const mapped = liveEvent(event, sample.outcomes as LiveOutcome[], 1);
+    const html = renderToStaticMarkup(createElement(EventCard, { event: mapped, selected: false, showPath: false, signalCount: 0, onSelect: () => {} }));
+    assert.ok(html.includes('Alpha') && html.includes('Beta') && html.includes('1-3'));
+    assert.ok(html.includes('Yes') && html.includes('No'));
+  }
+  assert.deepEqual(liveMatch(sports({ moneyline: sports().moneyline.map((outcome) => ({ ...outcome, midpoint: null })) }))!.probabilities, [null, null]);
+});
+test('Live, ended, and unknown sports states render bilingual source status and uppercase abbreviations', () => {
+  const render = (event: LiveEvent, language: 'en' | 'zh-Hant') => renderToStaticMarkup(
+    createElement(I18nProvider, { language, children: createElement(LiveMatchBoard, { match: liveMatch(event)! }) }));
+  const html = render(sports(), 'en');
+  assert.ok(html.includes('LIVE') && html.includes('Q4') && html.includes('00:03') && html.includes('1-3'));
+  assert.ok(html.includes('ALP') && html.includes('BET'));
+  assert.ok(!html.includes('Home') && !html.includes('Away'));
+  assert.ok(render(sports({ live: false, ended: true }), 'en').includes('Ended'));
+  assert.ok(render(sports({ live: null, ended: true }), 'zh-Hant').includes('已結束'));
+  assert.ok(render(sports({ live: null, ended: null }), 'en').includes('Starts'));
+  assert.ok(render(sports({ live: null, ended: null }), 'zh-Hant').includes('開賽時間'));
+  assert.ok(!render(sports({ live: null, ended: null }), 'en').includes('LIVE'));
+});
+test('Yes/No label selection carries outcome index into history, even when Yes is second', () => {
+  const pair = sample.outcomes.map((outcome) => ({ ...outcome, outcome_index: 1 - outcome.outcome_index }));
+  const row = liveEvent(sample.event as LiveEvent, pair as LiveOutcome[], 1).rows[0];
+  assert.equal(row.yesIndex, 1);
+  assert.equal(row.noIndex, 0);
+});
+test('History path breaks on null minutes/buckets and renders isolated real points', () => {
+  const path = historyPath([0.1, null, 0.3, 0.4, null], [0, 60, 120, 180, 240], 0, 240);
+  assert.equal((path.match(/M/g) ?? []).length, 2);
+  assert.ok(path.includes('M0,90 L0,90'));
+  assert.ok(path.includes('M50,70 L50,70 L75,60'));
+  assert.equal(historyPath([null, null], [0, 60], 0, 60).trim(), '');
 });

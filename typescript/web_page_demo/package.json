@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "build:static": "tsc && vite build --mode static",
     "preview": "vite preview",
-    "test": "node tests/run.mjs"
+    "test": "node tests/run.mjs",
+    "test:db": "node --test tests/live_sql.test.mjs"
   },
   "dependencies": {
     "@types/node": "^26.6.5",

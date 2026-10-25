@@ -63,8 +63,6 @@ git clone https://github.com/LightingArb/lac.git
 cd lac
 ```
 
-這是私人 repository，需要 Remy 開權限。
-
 ### 2. 環境檔 `.env`
 
 根目錄的 `.env` 是資料程式與網站共用的唯一一份設定，已經放在 repo 裡：
@@ -162,7 +160,7 @@ npm run dev
 打開 <http://127.0.0.1:5173/prediction>。左上角 Logo 旁邊切換 **Demo／Live**：
 
 - **Demo**：內建的範例資料，不需要資料庫有資料，也不需要資料程式在跑。
-- **Live**：前端尚未接上 §4 的正式市場表，現在不能使用；Demo 模式可用。
+- **Live**：可用，由範例網站伺服器唯讀本機 `lac_data` 的正式市場表；議題、報價、走勢圖與體育比分顯示資料庫已有的資料。資料服務停用時仍可讀取，但內容不會更新；不需要為了查看既有資料啟動資料服務或 VPN。
 
 其他指令：`npm run build:static` 會產生單一檔案 `typescript/web_page_demo/dist-static/index.html`，不用伺服器就能打開，適合傳給別人看（只有 Demo）。
 
@@ -186,6 +184,7 @@ psql "postgresql://admin:admin@127.0.0.1:5432/lac_data" -c \
 flowchart LR
     G["Polymarket Gamma API"] --> M["m_live：議題、市場、結果"]
     C["Polymarket CLOB API"] --> Q["m_live：最新報價"]
+    C --> B["m_live.m03_book：整本掛單簿"]
     H["Polymarket 歷史 API"] --> P["m_historical：分鐘價格"]
     M --> V["範例網站伺服器（唯讀）"]
     Q --> V
@@ -197,6 +196,7 @@ flowchart LR
     S --> T["m_product 資料表（還沒實作）"]
     M --> A["m_api：對外 HTTP（還沒實作）"]
     Q --> A
+    B --> A
     P --> A
     T --> A
     A --> U["A 組：網站與 app"]
@@ -210,7 +210,7 @@ flowchart LR
 ├── .gitignore                 # 忽略依賴、快取與建置輸出
 ├── python/
 │   ├── h_shared/              # 共用：資料庫連線、排程、HTTP 重試與限流
-│   ├── m_live/                # 議題、市場、結果（gamma）與最新報價（clob）
+│   ├── m_live/                # 議題、市場、結果、最新報價與掛單簿
 │   │   ├── all_setup.py       # 建表
 │   │   ├── all_runtime.py     # 常駐執行
 │   │   ├── sql/               # 資料表定義
@@ -219,7 +219,8 @@ flowchart LR
 │   │       │   ├── runtime_gamma_recent.py  # 新市場、關閉、未定案追蹤
 │   │       │   ├── runtime_gamma_full.py    # 完整議題掃描
 │   │       │   └── runtime_demand.py        # 合併產品需求
-│   │       └── m02_price/runtime_clob.py    # 依需求到期時間抓最佳買賣價
+│   │       ├── m02_price/runtime_clob.py    # 依需求到期時間抓最佳買賣價
+│   │       └── m03_book/runtime_book.py     # 抓第一結果的整本掛單簿
 │   └── m_historical/          # 歷史分鐘價格（UTC 日陣列、常駐）
 └── typescript/
     └── web_page_demo/
@@ -385,9 +386,16 @@ Normal 插入使用 `ON CONFLICT (market_id, day) DO NOTHING`。只有 success �
 
 **Live 畫面目前的讀法（範例網站）：**
 
-- Trending：進行中議題依 24 小時成交量取前 100 個，每頁 50 個；大型議題的市場也每頁 50 個。
+- 議題、市場、結果讀 `m_live.m01_event`、`m01_market`、`m01_outcome`；議題與市場都必須 `in_current_scan AND active AND NOT closed AND NOT archived`，現況發布時間使用 `m_live_updated_at`。
+- Trending：進行中議題依 24 小時成交量取前 100 個，每頁 50 個；大型議題的市場也每頁 50 個，兩者都用穩定排序與游標翻頁。分類與搜尋維持相同規則。
 - 分類：Trending、Politics、Sports、Finance、Crypto、Esports、Geopolitics、Weather；後面七個各對應同名的 Polymarket 標籤 slug。
+- 價格依 `market_id` 讀 `m02_clob_price` 的第一結果。第二結果買價＝1−第一結果賣價，賣價＝1−第一結果買價；中間價＝（買價＋賣價）÷2。SQL 以 numeric 計算，任何來源空值都保留空值，沒有價格列時兩個結果都顯示「—」；價格時間為 `requested_at`。
+- 走勢圖依市場讀 `m_historical.m01_price_day` 的 success 日陣列，第 1 格為 00:00 UTC，每格一分鐘；只讀完整 UTC 日。null、no_data、error 與未抓取日期都是缺口，不補點、不連線。Yes 按 label 對到 outcome_index；第二結果以 1 減第一結果推導，不把最新報價接上歷史線。
+- 1H／6H／1D／1W／1M／All 的終點是所選市場最後有資料的一分鐘；一次最多 50 個市場，每條線最多 1,440 點。超過一天在伺服器分成等寬時間桶，每桶取最後一個非 null 值，全空桶保留缺口；圖下標示選取資料區間的 UTC 起訖。
+- 體育議題的 teams 剛好兩隊才顯示比賽版型，依陣列順序顯示 name 與大寫 abbreviation，不標主客、不推論勝負。score 整串原樣顯示；live=true 顯示 LIVE、period 與 elapsed，否則 ended=true 顯示已結束，其餘顯示 game_start_at 的開賽時間。
+- 雙方機率只在整個議題有且僅有一個進行中的 moneyline 市場、兩個結果 label 完全符合兩隊 name 時顯示，用各自中間價並按隊伍順序對應；否則卡片顯示一般議題的前三個選項。這項判斷獨立於市場分頁。
 - 隱藏低流動性：隱藏 liquidity 小於 25,000 或未知的市場；被選中的訊號那一列一定保留。
+- 表不存在或查詢失敗時顯示錯誤。Live 的 Signal 資料尚未提供，掛單簿畫面與 m_api 不屬於此範例讀取範圍。
 
 ## 5｜畫面
 
@@ -534,7 +542,7 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
         }
       ],
       "source_updated_at": "2026-10-21T11:58:00Z",
-      "observed_at": "2026-10-21T12:00:00Z",
+      "m_live_updated_at": "2026-10-21T12:00:00Z",
       "market_count": 1,
       "lac": [
         {
@@ -605,7 +613,7 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
       }
     ],
     "source_updated_at": "2026-10-21T11:58:00Z",
-    "observed_at": "2026-10-21T12:00:00Z",
+    "m_live_updated_at": "2026-10-21T12:00:00Z",
     "market_count": 1,
     "lac": [
       {
@@ -660,7 +668,7 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
         "liquidity": "30000",
         "source_updated_at": "2026-10-21T11:58:00Z",
         "in_current_scan": true,
-        "observed_at": "2026-10-21T12:00:00Z",
+        "m_live_updated_at": "2026-10-21T12:00:00Z",
         "outcomes": [
           {
             "market_id": "567890",
