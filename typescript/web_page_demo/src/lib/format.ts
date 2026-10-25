@@ -7,6 +7,13 @@ export function cents(p: number | null): string {
   return `${c}¢`;
 }
 
+/** A share's price or average cost in ¢, to a tenth when needed: 0.4 → "40¢", 0.3636 → "36.4¢", 1 → "100¢". */
+export function shareCents(p: number | null): string {
+  if (p === null) return '—';
+  const c = Math.round(p * 1000) / 10;
+  return `${Number.isInteger(c) ? c : c.toFixed(1)}¢`;
+}
+
 /** Payout multiple for a winning share bought at `p`, e.g. 0.25 → "×4.0". */
 export function multiplier(p: number | null): string {
   if (p === null || p <= 0) return '—';

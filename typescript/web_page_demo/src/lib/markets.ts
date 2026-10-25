@@ -13,7 +13,6 @@ import {
   type Signal,
 } from '../data/catalog';
 import { canSee, type Access } from '../data/backend';
-import { DEMO_ACCOUNT } from '../data/terminal';
 import type { Messages } from '../i18n/en';
 
 export type WorkspaceMode = 'prediction' | 'signal';
@@ -97,7 +96,7 @@ export function fairValue(outcome: Outcome, side: Side): number {
 }
 
 /** Button text of a side: Yes/No on multi-outcome events, the event's own names (Up, Lakers…) on binary ones. */
-export function sideLabel(event: MarketEvent, side: Side): string {
+export function sideLabel(event: Pick<MarketEvent, 'kind' | 'yesLabel' | 'noLabel'>, side: Side): string {
   const multi = event.kind === 'multi';
   if (side === 'yes') return multi ? 'Yes' : (event.yesLabel ?? 'Yes');
   return multi ? 'No' : (event.noLabel ?? 'No');
@@ -120,8 +119,17 @@ export function priceSignals(access: Access): PricedSignal[] {
   });
 }
 
-/** Everything the Prediction and Signal pages show, derived from UI state. */
-export function deriveWorkspace(mode: WorkspaceMode, state: WorkspaceState, access: Access, t: Messages): Workspace {
+/**
+ * Everything the Prediction and Signal pages show, derived from UI state. `positions`: the account's open positions,
+ * so a picked one can be marked.
+ */
+export function deriveWorkspace(
+  mode: WorkspaceMode,
+  state: WorkspaceState,
+  access: Access,
+  t: Messages,
+  positions: Highlight[] = [],
+): Workspace {
   const query = state.query.trim().toLowerCase();
   const searching = query !== '';
   const matches = (e: MarketEvent) => e.title.toLowerCase().includes(query);
@@ -157,7 +165,7 @@ export function deriveWorkspace(mode: WorkspaceMode, state: WorkspaceState, acce
       : EVENTS.filter((e) => (active === 'trending' ? e.trending : e.cat === active));
     const selected = EVENTS_BY_ID[state.predictionEventId] ?? EVENTS[0];
     // Prediction has no signals; only a terminal position opened from Signal is marked here.
-    const position = DEMO_ACCOUNT.positions.find((p) => p.id === state.highlightId) ?? null;
+    const position = positions.find((p) => p.id === state.highlightId) ?? null;
     return {
       ...shared,
       categories,
@@ -189,9 +197,7 @@ export function deriveWorkspace(mode: WorkspaceMode, state: WorkspaceState, acce
   const candidate = EVENTS_BY_ID[state.signalEventId];
   const selected = candidate && listed(candidate) ? candidate : (events[0] ?? covered[0] ?? null);
   const picked: Highlight | null =
-    signals.find((s) => s.id === state.highlightId) ??
-    DEMO_ACCOUNT.positions.find((p) => p.id === state.highlightId) ??
-    null;
+    signals.find((s) => s.id === state.highlightId) ?? positions.find((p) => p.id === state.highlightId) ?? null;
 
   return {
     ...shared,

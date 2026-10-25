@@ -1,0 +1,532 @@
+.live {
+  color: var(--color-text-muted);
+}
+
+.gain {
+  color: var(--color-success);
+}
+
+.loss {
+  color: var(--color-danger);
+}
+
+/* Title and wallet */
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wallet {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.walletDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-success);
+}
+
+.address {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The four account numbers */
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.figure,
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+}
+
+.figure dt,
+.stat dt {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.figure dd {
+  margin: 0;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+/* Tabs */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tabActive {
+  border-bottom-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.tabCount {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.note {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* Overview */
+
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.periodRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dates label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.dates input {
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.stat dd {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.statSub {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.curve {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+}
+
+.curveHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.curveValue {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.plot {
+  position: relative;
+  height: 180px;
+}
+
+.plot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.zero {
+  stroke: var(--color-border-strong);
+  stroke-dasharray: 4 4;
+  stroke-width: 1;
+}
+
+.line {
+  fill: none;
+  stroke: var(--color-text-subtle);
+  stroke-width: 2;
+}
+
+.line.gain {
+  stroke: var(--color-success);
+}
+
+.line.loss {
+  stroke: var(--color-danger);
+}
+
+.tick {
+  position: absolute;
+  left: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tickTop {
+  top: 0;
+}
+
+.tickBottom {
+  bottom: 0;
+}
+
+.flat {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tables */
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+  font-size: 14px;
+  overflow: hidden;
+}
+
+.table th {
+  padding: 10px 8px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 12px 8px;
+  border-top: 1px solid var(--color-border-subtle);
+  vertical-align: middle;
+}
+
+.table th:first-child,
+.table td:first-child {
+  padding-left: 16px;
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-right: 16px;
+}
+
+.table .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.marketCell {
+  width: 34%;
+}
+
+.marketButton {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.marketButton:hover .marketTitle {
+  color: var(--color-primary);
+}
+
+.marketTitle {
+  width: 100%;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.marketButton .marketTitle {
+  width: auto;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.sub {
+  display: block;
+  width: 100%;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.marketButton .sub {
+  padding-left: 20px;
+}
+
+.positions .marketButton .sub {
+  padding-left: 0;
+}
+
+.chevron {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  transition: transform 0.12s;
+}
+
+.historyOpen .chevron {
+  transform: rotate(90deg);
+}
+
+.side {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sideYes {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.sideNo {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.action {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.actions > * + * {
+  margin-left: 6px;
+}
+
+.historyOpen td {
+  background: var(--color-surface-muted);
+}
+
+.stepsRow > td {
+  padding: 0 16px 14px 36px;
+  border-top: 0;
+  background: var(--color-surface-muted);
+}
+
+.steps {
+  font-size: 13px;
+}
+
+.emptyRow td {
+  padding: 28px 16px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* Narrow content: each row becomes a card, label on the left and value on the right; no sideways scrolling. */
+@container (max-width: 759px) {
+  .figures,
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .figure dd {
+    font-size: 20px;
+  }
+
+  /* All five tabs stay in sight: a second row before any sideways scrolling. */
+  .tabs {
+    flex-wrap: wrap;
+    gap: 0;
+  }
+
+  .tab {
+    padding: 0 8px;
+  }
+
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table tr {
+    padding: 10px 14px;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .table tr:first-child {
+    border-top: 0;
+  }
+
+  .table td,
+  .table th:first-child,
+  .table td:first-child,
+  .table th:last-child,
+  .table td:last-child {
+    padding: 3px 0;
+    border-top: 0;
+  }
+
+  /* The label on the left; the value and anything after it (a percent, a badge) together on the right. */
+  .table td[data-label] {
+    display: flex;
+    justify-content: flex-end;
+    align-items: baseline;
+    gap: 6px;
+    text-align: right;
+  }
+
+  .table td[data-label]::before {
+    flex: 0 0 auto;
+    margin-right: auto;
+    padding-right: 6px;
+    color: var(--color-text-muted);
+    content: attr(data-label);
+    font-size: 12px;
+    text-align: left;
+  }
+
+  .table td[data-label] .sub {
+    display: inline;
+    width: auto;
+  }
+
+  .marketCell {
+    padding-bottom: 6px;
+  }
+
+  .actions {
+    padding-top: 8px;
+    text-align: left;
+  }
+
+  .stepsRow > td {
+    padding: 0 0 6px;
+  }
+
+  .steps {
+    border-radius: var(--radius-lg);
+  }
+}

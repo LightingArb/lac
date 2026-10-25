@@ -13,7 +13,7 @@ type NavKey = keyof Messages['nav'];
 
 interface NavItem {
   to: string;
-  key: NavKey & ('prediction' | 'signal' | 'sports' | 'stocks' | 'products' | 'referral' | 'settings');
+  key: NavKey & ('prediction' | 'signal' | 'sports' | 'stocks' | 'products' | 'referral' | 'account' | 'settings');
   icon: IconName;
 }
 
@@ -27,6 +27,7 @@ const NAV_BOTTOM: NavItem[] = [
   { to: '/stocks', key: 'stocks', icon: 'stocks' },
   { to: '/products', key: 'products', icon: 'products' },
   { to: '/referral', key: 'referral', icon: 'gift' },
+  { to: '/account', key: 'account', icon: 'wallet' },
 ];
 
 const SETTINGS: NavItem = { to: '/settings', key: 'settings', icon: 'gear' };

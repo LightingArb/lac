@@ -40,6 +40,21 @@
   font-weight: 700;
 }
 
+.fullAccount {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.fullAccount:hover {
+  text-decoration: underline;
+}
+
 /* Wallet row */
 
 .wallet {
@@ -260,7 +275,22 @@
   border-top: 1px solid var(--color-border-subtle);
 }
 
-/* Locked buttons */
+/* Working buttons (close, redeem, delete) and locked ones (TP/SL, disconnect) */
+
+.actionButton {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.actionButton:hover {
+  background: var(--color-surface-muted);
+}
 
 .lockWrap {
   position: relative;

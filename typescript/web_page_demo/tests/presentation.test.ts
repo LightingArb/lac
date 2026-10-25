@@ -9,8 +9,17 @@ import { test } from 'node:test';
 import sample from './live_event.json';
 import { liveMatch, liveEvent, type LiveEvent, type LiveOutcome } from '../src/lib/live';
 import { cents, chance, multiplier } from '../src/lib/format';
-import { EVENTS, SIGNALS } from '../src/data/catalog';
-import { DEMO_ACCOUNT, EMPTY_ACCOUNT, type Account } from '../src/data/terminal';
+import { EVENTS, SIGNALS, type Side } from '../src/data/catalog';
+import {
+  ACCOUNT_DEMO_NOW,
+  DEMO_ACCOUNT,
+  EMPTY_ACCOUNT,
+  PAST_MARKETS,
+  type Account,
+  type AccountRecord,
+  type Fill,
+} from '../src/data/terminal';
+import { MemoryRouter } from 'react-router';
 import {
   INITIAL_WORKSPACE,
   deriveWorkspace,
@@ -22,14 +31,23 @@ import {
 } from '../src/lib/markets';
 import {
   accountSummary,
+  cancelOrder,
+  closePosition,
+  closeQuote,
   currentPrice,
-  positionPnl,
-  positionRow,
-  positionValue,
+  ledger,
+  marketName,
+  overview,
+  periodRange,
+  positionView,
+  redeemPosition,
   reservedCash,
+  round2,
   shortAddress,
-} from '../src/lib/terminal';
+  type Position,
+} from '../src/lib/account';
 import { TradingTerminal } from '../src/components/terminal/TradingTerminal';
+import { AccountPage } from '../src/pages/AccountPage';
 import { SportsList } from '../src/components/sports/SportsList';
 import {
   ALL_SPORTS,
@@ -361,68 +379,191 @@ const act = (b: Backend, a: BackendAction) => backendReducer(b, { ...a, at: 'Oct
 const BOTH_SPORTS = memberAccess(act(INITIAL_BACKEND, { type: 'grant', member: 'LAC8X2', product: 'sport', days: 30 }), 'LAC8X2');
 const NO_SPORT: Access = { products: ACCESS.products.filter((p) => p !== 'sport'), sports: [] };
 
-// Trading terminal (Demo account).
-const position = (id: string) => DEMO_ACCOUNT.positions.find((p) => p.id === id)!;
-test('Terminal summary: equity = cash + position values, available = cash − open buy orders, P/L summed', () => {
+// Account page and Signal terminal: one Demo account, worked out from its records.
+const BOOK = ledger(DEMO_ACCOUNT);
+const ACCOUNT_NOW = Date.parse(ACCOUNT_DEMO_NOW);
+const held = (eventId: string, outcomeId: string) => BOOK.open.find((p) => p.eventId === eventId && p.outcomeId === outcomeId)!;
+let recordNo = 0;
+const trade = (kind: 'buy' | 'sell', at: string, price: number, shares: number, fee = 0, side: Side = 'yes'): Fill => ({
+  id: `t${++recordNo}`, at, kind, eventId: 'fed', outcomeId: 'hold', side, price, shares, fee });
+const resolve = (at: string, winner: Side): AccountRecord => ({ id: `t${++recordNo}`, at, kind: 'resolve', eventId: 'fed', outcomeId: 'hold', winner });
+const redeem = (at: string, shares: number): AccountRecord => ({ id: `t${++recordNo}`, at, kind: 'redeem', eventId: 'fed', outcomeId: 'hold', side: 'yes', shares });
+const money = (kind: 'deposit' | 'withdraw' | 'reward', at: string, amount: number): AccountRecord => ({ id: `t${++recordNo}`, at, kind, amount });
+const wallet = (...records: AccountRecord[]): Account => ({ address: '0x0', records, orders: [] });
+const avg = (p: Position) => Math.round((p.cost / p.shares) * 10000) / 10000;
+test('Account rules: weighted average with buy fees; a partial sale realizes its part and the rest keeps its average', () => {
+  // 100 at 40¢ + $1 fee and 300 at 50¢ + $3: $194 for 400 shares.
+  const bought = ledger(wallet(money('deposit', '2026-03-01T00:00:00Z', 500), trade('buy', '2026-03-01T01:00:00Z', 0.4, 100, 1), trade('buy', '2026-03-01T02:00:00Z', 0.5, 300, 3)));
+  assert.deepEqual([bought.open[0].shares, round2(bought.open[0].cost), avg(bought.open[0])], [400, 194, 0.485]);
+  // 40¢ × 100, then 55¢ × 60: +$9, and the 40 left still cost 40¢.
+  const start = [money('deposit', '2026-03-01T00:00:00Z', 100), trade('buy', '2026-03-01T14:00:00Z', 0.4, 100)];
+  const sold = ledger(wallet(...start, trade('sell', '2026-03-05T15:30:00Z', 0.55, 60)));
+  assert.deepEqual([sold.open[0].shares, avg(sold.open[0]), round2(sold.open[0].realized), sold.closed.length], [40, 0.4, 9, 0]);
+  assert.deepEqual(sold.realizations.map((r) => [new Date(r.at).toISOString(), round2(r.amount)]), [['2026-03-05T15:30:00.000Z', 9]]);
+  // The sell fee comes off the realized part only.
+  const withFee = ledger(wallet(...start, trade('sell', '2026-03-05T15:30:00Z', 0.55, 60, 0.33)));
+  assert.deepEqual([round2(withFee.open[0].realized), avg(withFee.open[0]), withFee.cash], [8.67, 0.4, 92.67]);
+});
+test('Account rules: a lost resolution closes at once; a won one waits for redemption; buying again opens a new position', () => {
+  const start = [money('deposit', '2026-03-01T00:00:00Z', 100), trade('buy', '2026-03-01T14:00:00Z', 0.3, 100, 0.3)];
+  const lost = ledger(wallet(...start, resolve('2026-03-20T18:00:00Z', 'no')));
+  assert.deepEqual([lost.open.length, lost.closed[0].methods, round2(lost.closed[0].realized), lost.cash], [0, ['resolve'], -30.3, 69.7]);
+  assert.equal(new Date(lost.closed[0].closedAt!).toISOString(), '2026-03-20T18:00:00.000Z', 'closed when it resolved');
+  // Won: still open, marked redeemable and worth $1 a share until redeemed; nothing realized yet.
+  const won = wallet(...start, resolve('2026-03-20T18:00:00Z', 'yes'));
+  const waiting = ledger(won);
+  assert.deepEqual([waiting.open[0].redeemable, currentPrice(waiting.open[0]), waiting.closed.length, waiting.realizations.length], [true, 1, 0, 0]);
+  assert.deepEqual(accountSummary(won), { balance: 69.7, equity: 169.7, available: 69.7, unrealized: 69.7 });
+  const paid = ledger({ ...won, records: [...won.records, redeem('2026-03-21T09:00:00Z', 100)] });
+  assert.deepEqual([paid.open.length, paid.closed[0].methods, round2(paid.closed[0].realized), paid.cash], [0, ['redeem'], 69.7, 169.7]);
+  assert.deepEqual(paid.funds.map((f) => [f.record.kind, f.amount, f.balance]), [['redeem', 100, 169.7], ['deposit', 100, 100]]);
+  // Back to 0 shares, then a buy: a second position with its own average, the first one in the history.
+  const again = ledger(wallet(...start, trade('sell', '2026-03-02T10:00:00Z', 0.35, 100), trade('buy', '2026-03-03T10:00:00Z', 0.2, 50)));
+  assert.deepEqual([again.closed.map((p) => p.id), again.open.map((p) => p.id), avg(again.open[0])], [['p1'], ['p2'], 0.2]);
+  assert.deepEqual(again.open[0].steps.map((s) => s.record.kind), ['buy'], 'the new position has only its own records');
+  assert.throws(() => ledger(wallet(trade('sell', '2026-03-01T00:00:00Z', 0.5, 10))), /more shares than held/);
+});
+test('Account rules: deposits, withdrawals and rewards move the balance only; the Mar 1 example realizes +$33', () => {
+  const moves = wallet(money('deposit', '2026-03-01T00:00:00Z', 1000), money('reward', '2026-03-02T00:00:00Z', 5), money('withdraw', '2026-03-03T00:00:00Z', 200),
+    trade('buy', '2026-03-04T00:00:00Z', 0.4, 100), trade('sell', '2026-03-05T00:00:00Z', 0.5, 100));
+  const book = ledger(moves);
+  assert.equal(book.cash, 815);
+  assert.deepEqual(overview(book, { from: 0, to: ACCOUNT_NOW }).realized, 10, 'only the trade is profit');
+  assert.deepEqual(book.funds.map((f) => [f.record.kind, f.amount, f.balance]), [['withdraw', -200, 805], ['reward', 5, 1005], ['deposit', 1000, 1000]]);
+  // Demo: 3/1 40¢ × 100 → 3/5 55¢ × 60 (+$9) → 3/20 resolves Yes → 3/21 redeem 40 (+$24): one history row, 3/1 → 3/21, +$33.
+  const example = BOOK.closed.find((p) => p.eventId === 'fed-mar')!;
+  assert.deepEqual([new Date(example.openedAt).toISOString(), new Date(example.closedAt!).toISOString()], ['2026-03-01T14:00:00.000Z', '2026-03-21T09:00:00.000Z']);
+  assert.deepEqual([example.bought, example.methods, round2(example.realized), example.fees], [100, ['sell', 'redeem'], 33, 0]);
+  assert.deepEqual(example.steps.map((s) => [s.record.kind, s.realized]), [['buy', null], ['sell', 9], ['resolve', null], ['redeem', 24]]);
+  assert.deepEqual(marketName('fed-mar', 'hold', 'yes'), { title: 'Fed decision in March?', outcome: 'No change', side: 'Yes', listed: false });
+});
+test('Account numbers: balance = every cash movement, equity adds open positions, available takes off resting buys; page and terminal show the same', () => {
+  const cash = DEMO_ACCOUNT.records.reduce((sum, r) => {
+    if (r.kind === 'buy') return sum - r.price * r.shares - r.fee;
+    if (r.kind === 'sell') return sum + r.price * r.shares - r.fee;
+    if (r.kind === 'redeem') return sum + r.shares;
+    if (r.kind === 'resolve') return sum;
+    return sum + (r.kind === 'withdraw' ? -r.amount : r.amount);
+  }, 0);
+  assert.equal(round2(cash), BOOK.cash);
   assert.equal(reservedCash(DEMO_ACCOUNT.orders), 220); // 0.54×200 + 0.82×100 + 0.15×200; the sell holds no cash
-  assert.deepEqual(accountSummary(DEMO_ACCOUNT), { balance: 920.5, equity: 1891.3, available: 700.5, unrealized: 41.3 });
-  const rows = DEMO_ACCOUNT.positions.map((p) => positionRow(p));
+  const views = BOOK.open.map((p) => positionView(p));
+  const worth = views.reduce((sum, v) => sum + v.value!, 0);
+  const summary = accountSummary(DEMO_ACCOUNT);
+  assert.deepEqual(summary, { balance: 793.97, equity: round2(793.97 + worth), available: 573.97, unrealized: round2(worth - BOOK.open.reduce((s, p) => s + p.cost, 0)) });
+  assert.deepEqual(summary, { balance: 793.97, equity: 1810.77, available: 573.97, unrealized: 30.53 });
   assert.deepEqual(
-    rows.map((r) => [r.position.id, r.value, r.pnl!.amount, r.pnl!.percent]),
-    [
-      ['p1', 210, 30, 16.67],
-      ['p2', 63, -12, -16],
-      ['p3', 220, 28, 14.58],
-      ['p4', 145, 15, 11.54],
-      ['p5', 150, 13.5, 9.89],
-      ['p6', 76, -14, -15.56],
-      ['p7', 52.8, -7.2, -12],
-      ['p8', 54, -12, -18.18],
-    ],
+    ['london/c17', 'nyc/f66', 'london/c14'].map((k) => positionView(held(...(k.split('/') as [string, string])))).map((v) => [v.avgCost.toFixed(4), v.value, v.pnl!.amount, v.pnl!.percent]),
+    [['0.3636', 210, 28.2, 15.51], ['0.2525', 63, -12.75, -16.83], ['0.9191', 150, 12.13, 8.8]],
   );
-  assert.deepEqual(rows.filter((r) => r.redeemable).map((r) => r.position.id), ['p5']);
   assert.equal(shortAddress(DEMO_ACCOUNT.address), '0x12ab…89cd');
-});
-test('Terminal value and P/L follow price; a missing price stays unknown; an empty wallet is all zero', () => {
-  assert.equal(positionValue(150, 0.333), 49.95);
-  assert.equal(positionValue(10, null), null);
-  assert.equal(positionPnl(position('p1'), null), null);
-  assert.deepEqual(positionPnl({ ...position('p1'), avgCost: 0 }, 0.42), { amount: 210, percent: null });
   assert.deepEqual(accountSummary(EMPTY_ACCOUNT), { balance: 0, equity: 0, available: 0, unrealized: 0 });
-  const cashOnly: Account = { ...EMPTY_ACCOUNT, cash: 120.25 };
-  assert.deepEqual(accountSummary(cashOnly), { balance: 120.25, equity: 120.25, available: 120.25, unrealized: 0 });
+  // Both screens show the numbers of accountSummary: the Account page's header and the terminal's summary lines.
+  const shown = ['793.97', '1,810.77', '573.97', '+30.53'];
+  const actions = { onClosePosition: () => {}, onRedeem: () => {}, onCancelOrder: () => {} };
   for (const language of ['en', 'zh-Hant'] as const) {
-    const html = renderToStaticMarkup(createElement(I18nProvider, { language, children: createElement(TradingTerminal, {
-      open: true, onToggle: () => {}, account: EMPTY_ACCOUNT, activeId: null, onSelect: () => {} }) }));
-    assert.ok(html.includes(language === 'en' ? 'No positions' : '沒有持倉'));
+    const page = renderToStaticMarkup(createElement(I18nProvider, { language, children: createElement(AccountPage, {
+      dataMode: 'demo', account: DEMO_ACCOUNT, now: ACCOUNT_NOW, onOpenPosition: () => {}, ...actions }) }));
+    const terminal = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(I18nProvider, { language, children: createElement(TradingTerminal, {
+      open: true, onToggle: () => {}, account: DEMO_ACCOUNT, activeId: null, onSelect: () => {}, ...actions }) })));
+    for (const value of shown) assert.ok(page.includes(value) && terminal.includes(value), `${language}: ${value} on both`);
+    assert.ok(terminal.includes('href="/account"') && terminal.includes(language === 'en' ? 'Full account' : '完整帳戶'));
+    const empty = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(I18nProvider, { language, children: createElement(TradingTerminal, {
+      open: true, onToggle: () => {}, account: EMPTY_ACCOUNT, activeId: null, onSelect: () => {}, ...actions }) })));
+    assert.ok(empty.includes(language === 'en' ? 'No positions' : '沒有持倉'));
+    const live = renderToStaticMarkup(createElement(I18nProvider, { language, children: createElement(AccountPage, {
+      dataMode: 'live', account: DEMO_ACCOUNT, now: ACCOUNT_NOW, onOpenPosition: () => {}, ...actions }) }));
+    assert.ok(live.includes(language === 'en' ? 'No account data in Live mode yet' : 'Live 模式還沒有帳戶資料') && !live.includes('793.97'));
   }
 });
-test('Demo account is consistent: Demo events, screen prices, enough rows, cash equals the ledger', () => {
-  const ids = new Set(EVENTS.map((e) => e.id));
-  for (const item of [...DEMO_ACCOUNT.positions, ...DEMO_ACCOUNT.orders, ...DEMO_ACCOUNT.trades.filter((x) => x.eventId)]) {
-    assert.ok(ids.has(item.eventId!), `${item.id} uses a Demo event`);
+test('Periods: today from local midnight, last week 7 days back, last month 30 days back, custom days both included', () => {
+  const zone = process.env.TZ;
+  const DAY = 86_400_000;
+  try {
+    for (const [tz, midnight, volume] of [['UTC', '2026-10-21T00:00:00.000Z', 425], ['Asia/Taipei', '2026-10-20T16:00:00.000Z', 500], ['America/New_York', '2026-10-21T04:00:00.000Z', 425]] as const) {
+      process.env.TZ = tz;
+      const today = periodRange('today', ACCOUNT_NOW);
+      assert.deepEqual([new Date(today.from).toISOString(), today.to], [midnight, ACCOUNT_NOW], tz);
+      // In Taipei, today began at 16:00 UTC on Oct 20, so the 18:00 UTC buy on Oct 20 counts.
+      assert.deepEqual(overview(BOOK, today), { ...overview(BOOK, today), realized: 41.52, closed: 2, wins: 1, losses: 1, volume, fees: volume / 100 }, tz);
+    }
+    process.env.TZ = 'UTC';
+    assert.deepEqual(periodRange('week', ACCOUNT_NOW), { from: ACCOUNT_NOW - 7 * DAY, to: ACCOUNT_NOW });
+    assert.deepEqual(periodRange('month', ACCOUNT_NOW), { from: ACCOUNT_NOW - 30 * DAY, to: ACCOUNT_NOW });
+    const custom = periodRange('custom', ACCOUNT_NOW, { from: '2026-03-01', to: '2026-03-21' });
+    assert.deepEqual([new Date(custom.from).toISOString(), new Date(custom.to).toISOString()], ['2026-03-01T00:00:00.000Z', '2026-03-21T23:59:59.999Z']);
+    assert.deepEqual(periodRange('custom', ACCOUNT_NOW, { from: '2026-03-21', to: '2026-03-01' }), custom, 'either order');
+    const pick = (o: ReturnType<typeof overview>) => [o.realized, o.closed, o.wins, o.losses, o.volume, o.fees];
+    assert.deepEqual(pick(overview(BOOK, custom)), [33, 1, 1, 0, 73, 0]);
+    // The last day counts in full, the day after does not: up to Mar 20 the redemption on Mar 21 is outside.
+    assert.deepEqual(pick(overview(BOOK, periodRange('custom', ACCOUNT_NOW, { from: '2026-03-01', to: '2026-03-20' }))), [9, 0, 0, 0, 73, 0]);
+    assert.deepEqual(pick(overview(BOOK, periodRange('custom', ACCOUNT_NOW, { from: '2026-03-21', to: '2026-03-21' }))), [24, 1, 1, 0, 0, 0]);
+    assert.deepEqual(pick(overview(BOOK, periodRange('week', ACCOUNT_NOW))), [-19.08, 3, 1, 2, 1284.5, 12.85]);
+    assert.deepEqual(pick(overview(BOOK, periodRange('month', ACCOUNT_NOW))), [-68.41, 5, 2, 3, 1517.5, 15.18]);
+    // The curve: realized profit added up, from 0 at the start to the period's total at the end.
+    const curve = overview(BOOK, periodRange('today', ACCOUNT_NOW)).curve;
+    assert.deepEqual(curve.map((p) => p.value), [0, 1.48, -5.96, 41.52, 41.52]);
+    assert.deepEqual([curve[0].at, curve.at(-1)!.at], [periodRange('today', ACCOUNT_NOW).from, ACCOUNT_NOW]);
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
   }
-  // Both kinds of position: on an event Signal lists, and on one LAC does not cover.
-  const covered = DEMO_ACCOUNT.positions.map((p) => signalCovers(p.eventId, ACCESS));
+});
+test('Buttons: close sells every share into the history, redeem pays $1 a share into the funds, delete frees the held cash', () => {
+  const c17 = held('london', 'c17');
+  assert.deepEqual(closeQuote(positionView(c17)), { price: 0.42, fee: 2.1, proceeds: 207.9, pnl: 26.1 });
+  const closed = closePosition(DEMO_ACCOUNT, c17.id, ACCOUNT_DEMO_NOW);
+  const afterClose = ledger(closed);
+  assert.ok(!afterClose.open.some((p) => p.id === c17.id), 'gone from the positions');
+  assert.deepEqual([afterClose.closed[0].id, afterClose.closed[0].methods, round2(afterClose.closed[0].realized)], [c17.id, ['sell'], 26.1]);
+  assert.equal(afterClose.cash, round2(793.97 + 207.9));
+  assert.deepEqual(closed.records.at(-1), { id: 'r34', at: ACCOUNT_DEMO_NOW, kind: 'sell', eventId: 'london', outcomeId: 'c17', side: 'yes', price: 0.42, shares: 500, fee: 2.1 });
+  // Its resting sell (200 at 48¢) goes with it: every share is sold. Other orders stay, and the sell held no cash.
+  assert.deepEqual(closed.orders.map((o) => o.id), ['o1', 'o2', 'o4']);
+  assert.equal(accountSummary(closed).available, round2(793.97 + 207.9 - 220));
+  assert.equal(overview(afterClose, periodRange('today', ACCOUNT_NOW)).realized, round2(overview(BOOK, periodRange('today', ACCOUNT_NOW)).realized + 26.1));
+  // Redeem: the won London "14°C or below" No shares, $150 into the funds log.
+  const c14 = held('london', 'c14');
+  const afterRedeem = ledger(redeemPosition(DEMO_ACCOUNT, c14.id, ACCOUNT_DEMO_NOW));
+  assert.deepEqual([afterRedeem.funds[0].record.kind, afterRedeem.funds[0].amount, afterRedeem.funds[0].balance], ['redeem', 150, 943.97]);
+  assert.deepEqual([afterRedeem.closed[0].id, afterRedeem.closed[0].methods, round2(afterRedeem.closed[0].realized)], [c14.id, ['redeem'], 12.13]);
+  assert.equal(accountSummary(redeemPosition(DEMO_ACCOUNT, c14.id, ACCOUNT_DEMO_NOW)).equity, 1810.77, 'it was already worth $1 a share');
+  // Delete: the buy at 54¢ with 200 unfilled held $108; the sell order held no cash.
+  assert.equal(accountSummary(cancelOrder(DEMO_ACCOUNT, 'o1')).available, 681.97);
+  assert.equal(accountSummary(cancelOrder(DEMO_ACCOUNT, 'o3')).available, 573.97);
+  assert.deepEqual(cancelOrder(DEMO_ACCOUNT, 'o1').orders.map((o) => o.id), ['o2', 'o3', 'o4']);
+  // A won position is redeemed, not closed; an open one is closed, not redeemed.
+  assert.equal(closeQuote(positionView(c14)), null);
+  assert.throws(() => redeemPosition(DEMO_ACCOUNT, c17.id, ACCOUNT_DEMO_NOW), /not redeemable/);
+});
+test('Demo account is consistent: known markets, prices on screen, every tab has rows, today has trades, cash never below 0', () => {
+  const known = new Set([...EVENTS.map((e) => e.id), ...PAST_MARKETS.map((m) => m.id)]);
+  for (const item of [...DEMO_ACCOUNT.records.filter((r) => 'eventId' in r), ...DEMO_ACCOUNT.orders]) {
+    assert.ok(known.has((item as { eventId: string }).eventId), `${item.id} uses a known market`);
+  }
+  // Open positions are on listed Demo events (with prices): some Signal lists, some it does not.
+  assert.ok(BOOK.open.every((p) => EVENTS.some((e) => e.id === p.eventId)));
+  const covered = BOOK.open.map((p) => signalCovers(p.eventId, ACCESS));
   assert.ok(covered.includes(true) && covered.includes(false));
-  for (const p of DEMO_ACCOUNT.positions.filter((x) => x.settledPrice === undefined)) {
-    const event = EVENTS.find((e) => e.id === p.eventId)!;
-    const outcome = event.rows.find((r) => r.id === p.outcomeId)!;
+  for (const p of BOOK.open.filter((x) => !x.redeemable)) {
+    const outcome = EVENTS.find((e) => e.id === p.eventId)!.rows.find((r) => r.id === p.outcomeId)!;
     assert.equal(currentPrice(p), p.side === 'yes' ? outcome.yes : outcome.no);
   }
-  const rows = DEMO_ACCOUNT.positions.map((p) => positionRow(p));
-  assert.ok(rows.length >= 5 && rows.some((r) => r.pnl!.amount > 0) && rows.some((r) => r.pnl!.amount < 0));
+  const views = BOOK.open.map((p) => positionView(p));
+  assert.ok(views.length >= 5 && views.some((v) => v.pnl!.amount > 0) && views.some((v) => v.pnl!.amount < 0) && views.some((v) => v.position.redeemable));
   assert.ok(DEMO_ACCOUNT.orders.length >= 3 && new Set(DEMO_ACCOUNT.orders.map((o) => o.action)).size === 2);
-  const kinds = new Set(DEMO_ACCOUNT.trades.map((x) => x.kind));
-  assert.ok(DEMO_ACCOUNT.trades.length >= 10 && kinds.has('deposit') && kinds.has('redeem'));
-  assert.equal(Math.round(DEMO_ACCOUNT.trades.reduce((sum, x) => sum + x.amount, 0) * 100) / 100, DEMO_ACCOUNT.cash);
-  const times = DEMO_ACCOUNT.trades.map((x) => Date.parse(x.at));
-  assert.deepEqual(times, [...times].sort((a, b) => b - a), 'trades are newest first');
+  assert.ok(BOOK.closed.length >= 5 && new Set(BOOK.closed.flatMap((p) => p.methods)).size === 3);
+  assert.deepEqual(new Set(BOOK.funds.map((f) => f.record.kind)), new Set(['deposit', 'withdraw', 'redeem', 'reward']));
+  assert.ok(BOOK.fills.filter((f) => f.at.startsWith('2026-10-21')).length >= 5, 'trades today');
+  assert.ok(DEMO_ACCOUNT.records.every((r) => Date.parse(r.at) <= ACCOUNT_NOW) && DEMO_ACCOUNT.orders.every((o) => Date.parse(o.placedAt) <= ACCOUNT_NOW));
+  for (let i = 1; i <= DEMO_ACCOUNT.records.length; i++) {
+    assert.ok(ledger({ ...DEMO_ACCOUNT, records: DEMO_ACCOUNT.records.slice(0, i) }).cash >= 0, `cash after ${DEMO_ACCOUNT.records[i - 1].id}`);
+  }
 });
 test('Clicking a position: with LAC signals it opens in the Signal columns, without them on Prediction; both mark the cell', () => {
-  const open = (state: WorkspaceState) => deriveWorkspace('signal', state, ACCESS, en);
-  const predict = (state: WorkspaceState) => deriveWorkspace('prediction', state, ACCESS, en);
-  for (const p of DEMO_ACCOUNT.positions.filter((x) => signalCovers(x.eventId, ACCESS))) {
+  const open = (state: WorkspaceState) => deriveWorkspace('signal', state, ACCESS, en, BOOK.open);
+  const predict = (state: WorkspaceState) => deriveWorkspace('prediction', state, ACCESS, en, BOOK.open);
+  for (const p of BOOK.open.filter((x) => signalCovers(x.eventId, ACCESS))) {
     for (const start of ['trending', 'weather', 'sport'] as const) {
       const before: WorkspaceState = { ...INITIAL_WORKSPACE, signalCategory: start };
       const after = open({ ...before, ...focusHighlight(open(before), p) });
@@ -433,10 +574,10 @@ test('Clicking a position: with LAC signals it opens in the Signal columns, with
   }
   // The US shutdown position has no LAC signal: Signal can't list it, so it opens on Prediction. So does Lakers:
   // LAC has a basketball signal, but the customer holds only soccer.
-  const shutdown = position('p8');
+  const shutdown = held('shutdown', 'yn');
   assert.equal(signalCovers(shutdown.eventId, ACCESS), false);
-  assert.equal(signalCovers(position('p4').eventId, ACCESS), false);
-  assert.equal(signalCovers(position('p4').eventId, BOTH_SPORTS), true);
+  assert.equal(signalCovers(held('lakers', 'ml').eventId, ACCESS), false);
+  assert.equal(signalCovers(held('lakers', 'ml').eventId, BOTH_SPORTS), true);
   assert.ok(!open(INITIAL_WORKSPACE).events.some((e) => e.id === shutdown.eventId));
   for (const start of ['trending', 'finance', 'politics'] as const) {
     const before: WorkspaceState = { ...INITIAL_WORKSPACE, predictionCategory: start, highlightId: 's1' };
@@ -444,21 +585,24 @@ test('Clicking a position: with LAC signals it opens in the Signal columns, with
     assert.equal(after.selected!.id, 'shutdown');
     assert.equal(after.activeCategory, 'politics', 'the event is not trending, so its own category lists it');
     assert.ok(after.events.some((e) => e.id === 'shutdown'));
-    assert.deepEqual([after.highlight!.id, after.highlight!.outcomeId, after.highlight!.side], ['p8', 'yn', 'yes']);
+    assert.deepEqual([after.highlight!.id, after.highlight!.outcomeId, after.highlight!.side], [shutdown.id, 'yn', 'yes']);
   }
   // Prediction marks only terminal positions, and only on the selected event.
   assert.equal(predict({ ...INITIAL_WORKSPACE, highlightId: 's1', predictionEventId: 'london' }).highlight, null);
-  assert.equal(predict({ ...INITIAL_WORKSPACE, highlightId: 'p8', predictionEventId: 'fed' }).highlight, null);
+  assert.equal(predict({ ...INITIAL_WORKSPACE, highlightId: shutdown.id, predictionEventId: 'fed' }).highlight, null);
+  // A closed position marks nothing: only the open ones are passed in.
+  const closedState = { ...INITIAL_WORKSPACE, highlightId: shutdown.id, predictionEventId: 'shutdown' };
+  assert.equal(deriveWorkspace('prediction', closedState, ACCESS, en, []).highlight, null);
   // The category stays when it lists the event, otherwise Trending.
   const weather = open({ ...INITIAL_WORKSPACE, signalCategory: 'weather' });
-  assert.equal(focusHighlight(weather, position('p1')).signalCategory, 'weather');
-  assert.equal(focusHighlight(weather, position('p7')).signalCategory, 'trending');
+  assert.equal(focusHighlight(weather, held('london', 'c17')).signalCategory, 'weather');
+  assert.equal(focusHighlight(weather, held('eth', 'ud')).signalCategory, 'trending');
   // Side names follow the event: Yes/No on multi-outcome events, team or Up/Down on binary ones.
   const lakers = EVENTS.find((e) => e.id === 'lakers')!;
-  assert.equal(positionRow(position('p4')).sideLabel, 'Celtics');
+  assert.equal(positionView(held('lakers', 'ml')).market.side, 'Celtics');
   assert.equal(sideLabel(lakers, 'no'), 'Celtics');
-  assert.equal(positionRow(position('p1')).sideLabel, 'Yes');
-  assert.equal(positionRow(position('p6')).sideLabel, 'Up');
+  assert.equal(positionView(held('london', 'c17')).market.side, 'Yes');
+  assert.equal(positionView(held('btc', 'ud')).market.side, 'Up');
 });
 
 // Sports page.

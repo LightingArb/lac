@@ -1,0 +1,40 @@
+.figures {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 20px;
+  font-size: 14px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.row dt {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+}
+
+.row dd {
+  min-width: 0;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}
+
+.gain {
+  color: var(--color-success);
+}
+
+.loss {
+  color: var(--color-danger);
+}
+
+.buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}

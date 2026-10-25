@@ -12,10 +12,11 @@ import type { Preferences } from './data/preferences';
 import { DEFAULT_REFERRAL_CODE, MY_AGENTS } from './data/referral';
 import { DEMO_SPORTS_SIGNALS, SPORTS_DEMO_NOW } from './data/sportsSignals';
 import { DEFAULT_HOLDING, HOLDINGS, type Holding } from './data/stocks';
-import { DEMO_ACCOUNT, type Position } from './data/terminal';
+import { ACCOUNT_DEMO_NOW, DEMO_ACCOUNT } from './data/terminal';
 import { memberAccess, memberByEmail, type Backend } from './data/backend';
 import { ME, type WithdrawalDraft } from './data/withdrawals';
 import { useT } from './i18n';
+import { cancelOrder, closePosition, ledger, redeemPosition, type Position } from './lib/account';
 import {
   INITIAL_WORKSPACE,
   deriveWorkspace,
@@ -32,6 +33,7 @@ import { NO_MARKS, cellMarks, gameOf, signalCard, sportsSignals } from './lib/sp
 import { COMPACT_QUERY, MOBILE_QUERY, TERMINAL_QUERY, useMediaQuery } from './lib/useMediaQuery';
 import { MarketsPage } from './pages/MarketsPage';
 import { useLiveWorkspace, type DataMode } from './lib/live';
+import { AccountPage } from './pages/AccountPage';
 import { ProductsPage } from './pages/ProductsPage';
 import { ReferralPage } from './pages/ReferralPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -39,11 +41,12 @@ import { SportsPage } from './pages/SportsPage';
 import { StocksPage } from './pages/StocksPage';
 import styles from './App.module.css';
 
-type Mode = 'prediction' | 'signal' | 'sports' | 'stocks' | 'products' | 'referral' | 'settings';
+type Mode = 'prediction' | 'signal' | 'sports' | 'stocks' | 'products' | 'referral' | 'account' | 'settings';
 
-const MODES: Mode[] = ['prediction', 'signal', 'sports', 'stocks', 'products', 'referral', 'settings'];
+const MODES: Mode[] = ['prediction', 'signal', 'sports', 'stocks', 'products', 'referral', 'account', 'settings'];
 
 const SPORTS_NOW = Date.parse(SPORTS_DEMO_NOW);
+const ACCOUNT_NOW = Date.parse(ACCOUNT_DEMO_NOW);
 
 function modeFromPath(pathname: string): Mode {
   const segment = pathname.split('/')[1] as Mode;
@@ -89,6 +92,15 @@ export default function App({
   const [sportsQuery, setSportsQuery] = useState('');
   const [oddsFormat, setOddsFormat] = useState<OddsFormat>('decimal');
   const [holding, setHolding] = useState<Holding>(DEFAULT_HOLDING);
+  // One Demo account for the Account page and the Signal terminal: a button pressed on one shows on the other.
+  // It lives in memory only, so a reload brings the Demo back.
+  const [account, setAccount] = useState(DEMO_ACCOUNT);
+  const openPositions = useMemo(() => ledger(account).open, [account]);
+  const accountActions = {
+    onClosePosition: (id: string) => setAccount((prev) => closePosition(prev, id, ACCOUNT_DEMO_NOW)),
+    onRedeem: (id: string) => setAccount((prev) => redeemPosition(prev, id, ACCOUNT_DEMO_NOW)),
+    onCancelOrder: (id: string) => setAccount((prev) => cancelOrder(prev, id)),
+  };
   const sports = useSportsWorkspace(mode === 'sports', dataMode, sportsQuery);
   // The terminal is Demo-only for now: Live Signal still has no signals and no wallet.
   const showTerminal = mode === 'signal' && dataMode === 'demo';
@@ -117,9 +129,9 @@ export default function App({
   const demoWorkspace = useMemo(
     () =>
       dataMode === 'demo' && (mode === 'prediction' || mode === 'signal')
-        ? deriveWorkspace(mode, state, access, t)
+        ? deriveWorkspace(mode, state, access, t, openPositions)
         : null,
-    [mode, state, dataMode, access, t],
+    [mode, state, dataMode, access, t, openPositions],
   );
 
   const workspace = dataMode === 'live' ? live.workspace : demoWorkspace;
@@ -142,10 +154,14 @@ export default function App({
     if (workspace) update(focusHighlight(workspace, cell));
   };
 
-  // A position stays on Signal when Signal lists its event (it has LAC signals); otherwise it opens on Prediction.
+  // A position opens on Signal when Signal lists its event (it has LAC signals); otherwise on Prediction. From the
+  // Account page it goes there; from the terminal it stays on Signal.
   const pickPosition = (position: Position) => {
     if (signalCovers(position.eventId, access)) {
-      pickHighlight(position);
+      const signalSpace =
+        mode === 'signal' && workspace ? workspace : deriveWorkspace('signal', state, access, t, openPositions);
+      update(focusHighlight(signalSpace, position));
+      if (mode !== 'signal') navigate('/signal');
       return;
     }
     update(focusPrediction(state, position));
@@ -380,6 +396,18 @@ export default function App({
           />
           <Route path="products" element={<ProductsPage items={backend.items} versions={backend.versions} />} />
           <Route
+            path="account"
+            element={
+              <AccountPage
+                dataMode={dataMode}
+                account={account}
+                now={ACCOUNT_NOW}
+                onOpenPosition={pickPosition}
+                {...accountActions}
+              />
+            }
+          />
+          <Route
             path="referral"
             element={
               <ReferralPage
@@ -436,21 +464,23 @@ export default function App({
               variant="drawer"
               open
               onToggle={() => setTerminalDrawerOpen(false)}
-              account={DEMO_ACCOUNT}
+              account={account}
               activeId={state.highlightId}
               onSelect={(position: Position) => {
                 setTerminalDrawerOpen(false);
                 pickPosition(position);
               }}
+              {...accountActions}
             />
           </Drawer>
         ) : (
           <TradingTerminal
             open={terminalOpen}
             onToggle={() => setTerminalOpen((open) => !open)}
-            account={DEMO_ACCOUNT}
+            account={account}
             activeId={state.highlightId}
             onSelect={pickPosition}
+            {...accountActions}
           />
         ))}
 
