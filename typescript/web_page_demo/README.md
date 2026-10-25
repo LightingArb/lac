@@ -21,7 +21,7 @@ npm run test:db  # 本機 lac_data：唯讀 SELECT，測 SQL numeric、歷史分
 npm run build
 ```
 
-- `npm test`：Live 欄位對應、缺值、結果順序、moneyline 對隊名或 alias、交易終端的淨值／可用／現值／損益與點持倉（留在 Signal 或跳到 Prediction）、Sports 的議題合併成場／代表議題／賠率換算／跨議題主線／勝負三格／聯賽對照表／排序、權益照運動（Signal 與 Sports 同一個判斷）、Sports 訊號的報酬率顯示條件／沒訂只給數量／點卡片對到的比賽與格子、Stocks 的日 K（同種子、約 3 年平日、高低包住開收、最後收盤＝現價）／財報的五個數字（下緣 < 50% < 上緣、合理價格在中間、持有時間越長越寬）／區間框（過去的框從公布日接到下一份、不重疊，最新一框＝公布日＋N×90 天，今天以後照平日算）／列表與上方的合理價格＝最新一份、空間的算法與文字／畫面沒有「機率」「勝率」「Chance」／國會持股的排序、申報天數與圖上標記／基金成分兩個方向與「其他」合計 100%／台股沒有國會持股、分成與推薦碼規則、提領流程、後台產品版本與權益規則、中英文鍵值是否一致。
+- `npm test`：Live 欄位對應、缺值、結果順序、moneyline 對隊名或 alias、交易終端的淨值／可用／現值／損益與點持倉（留在 Signal 或跳到 Prediction）、Sports 的議題合併成場／代表議題／賠率換算／跨議題主線／勝負三格／聯賽對照表／排序、權益照運動（Signal 與 Sports 同一個判斷）、Sports 訊號的報酬率顯示條件／沒訂只給數量／點卡片對到的比賽與格子、Stocks 的日 K（同種子、約 3 年平日、高低包住開收、最後收盤＝現價）／財報的五個數字（下緣 < 50% < 上緣、合理價格在中間、持有時間越長越寬）／區間框（過去的框從公布日接到下一份、不重疊，最新一框＝公布日＋N×90 天，今天以後照平日算）／價格軸只看畫面裡的 K 棒與最新一框（過去的框超出去的部分切掉）／列表與上方的合理價格＝最新一份、空間的算法與文字／畫面沒有「機率」「勝率」「Chance」／國會持股的排序、申報天數與圖上標記／基金成分兩個方向與「其他」合計 100%／台股沒有國會持股、分成與推薦碼規則、提領流程、後台產品版本與權益規則、中英文鍵值是否一致。
 - `npm run build`：TypeScript 檢查與 Vite 靜態輸出，結果在 `dist/`。
 - `npm run build:static`：輸出單一檔案 `dist-static/index.html`（JS、CSS 都包在裡面，路由用 `#/`），不用伺服器就能打開或分享；這個版本只有 Demo。
 - `tests/live_event.json`：以新表讀取程式於 2026-10-25 07:15:34 UTC 從本機 `lac_data` 取得 `/api/live/event?id=878226`（Russia x Ukraine any diplomatic meeting by...?）的實際回應；僅供測試，不代表目前行情。原始回應、查詢與逐點比對在 `/home/admin/research/web/web_page_demo_live/`。
@@ -56,7 +56,7 @@ npm run build
 | [src/lib/terminal.ts](src/lib/terminal.ts)         | 交易終端的計算（純函式）：現值、損益、損益百分比、掛單佔用、淨值、可用         |
 | [src/lib/sports.ts](src/lib/sports.ts)             | Sports：聯賽 → 運動對照表、議題合併成場、代表議題、賠率換算、主線、勝負三格、排序、分類，以及 Demo／Live 的讀取 |
 | [src/lib/sportsSignals.ts](src/lib/sportsSignals.ts) | Sports 的訊號：顯示條件、格子的報酬率與標黃、訊號欄的卡片與沒訂運動的數量 |
-| [src/lib/stocks.ts](src/lib/stocks.ts)             | Stocks（純函式）：日 K 與財報產生、區間框與一打開的範圍、空間文字、搜尋、議員與交易、圖上標記、基金成分 |
+| [src/lib/stocks.ts](src/lib/stocks.ts)             | Stocks（純函式）：日 K 與財報產生、區間框與一打開的範圍、價格軸、空間文字、搜尋、議員與交易、圖上標記、基金成分 |
 | [src/lib/live.ts](src/lib/live.ts)                 | Live 資料讀取、分頁、刷新與共用模型對應                                      |
 | [src/styles/tokens.css](src/styles/tokens.css)     | 顏色、圓角、陰影等設計 token                                                 |
 | [server/live.ts](server/live.ts)                   | Vite 的唯讀 PostgreSQL middleware（Prediction 與 Sports 的 `/api/live/*`）    |

@@ -175,9 +175,9 @@ export interface EarningsReport {
 const roundPrice = (value: number) => (value >= 100 ? Math.round(value) : cents(value));
 
 /**
- * About three years of earnings reports, 84 to 98 days apart, the last one before `today`. Each report gives every
- * holding period a range around that day's close: wider for a longer holding period, the median and the fair price
- * inside it. Seeded per stock, like the candles.
+ * About three years of earnings reports, 84 to 100 days apart (84 to 98 days on, moved to the next weekday), the last
+ * one before `today`. Each report gives every holding period a range around that day's close: wider for a longer
+ * holding period, the median and the fair price inside it. Seeded per stock, like the candles.
  */
 export function earningsReports(
   stock: Stock,
@@ -270,6 +270,21 @@ export function openingView(candles: Candle[], reports: EarningsReport[]): { pas
     past: weekdays(addDays(last, -365), last).length,
     future: weekdays(last, addDays(reports[reports.length - 1].date, 91)).length,
   };
+}
+
+/**
+ * The chart's price axis: the range of the candles in view (KLineChart's own, with the indicators drawn on them),
+ * widened to the latest box when it is in view. Past boxes don't widen it: a tall Q+8 or Q+12 box would squash the
+ * candles, so the part of it beyond is cut off. `view` is the candle indexes on screen, after any drag or zoom.
+ */
+export function priceAxis(
+  candles: { from: number; to: number },
+  boxes: RangeBox[],
+  view: { from: number; to: number },
+): { from: number; to: number } {
+  const latest = boxes.find((b) => b.latest);
+  if (!latest || latest.end < view.from || latest.start > view.to) return { from: candles.from, to: candles.to };
+  return { from: Math.min(candles.from, latest.range.lower), to: Math.max(candles.to, latest.range.upper) };
 }
 
 // ---- Congress filings ----

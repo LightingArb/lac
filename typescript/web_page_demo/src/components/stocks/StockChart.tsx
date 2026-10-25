@@ -19,6 +19,7 @@ import { useT } from '../../i18n';
 import {
   MAIN_INDICATORS,
   formatPrice,
+  priceAxis,
   weekdaysAfter,
   type Candle,
   type RangeBox,
@@ -234,17 +235,15 @@ function chartStyles(market: StockMarket): DeepPartial<Styles> {
   };
 }
 
-/** The candle pane's price range, widened to the boxes in view so their tops and bottoms are on screen. */
-const fitBoxes =
+/**
+ * The candle pane's price range: the candles in view, widened to the latest box when it is in view (past boxes are
+ * cut off). KLineChart asks again after every drag or zoom.
+ */
+const fitLatestBox =
   (boxes: { current: RangeBox[] }) =>
   ({ chart, defaultRange }: AxisCreateRangeParams): AxisRange => {
     const { realFrom, realTo } = chart.getVisibleRange();
-    let [from, to] = [defaultRange.from, defaultRange.to];
-    for (const box of boxes.current) {
-      if (box.end < realFrom || box.start > realTo) continue;
-      from = Math.min(from, box.range.lower);
-      to = Math.max(to, box.range.upper);
-    }
+    let { from, to } = priceAxis(defaultRange, boxes.current, { from: realFrom, to: realTo });
     const pad = (to - from) * 0.03;
     [from, to] = [from - pad, to + pad];
     const range = to - from;
@@ -327,7 +326,7 @@ export function StockChart({
         return utils.formatDate(dateTimeFormat, day, template);
       },
     });
-    chart.overrideYAxis({ paneId: CANDLE_PANE, createRange: fitBoxes(boxesRef) });
+    chart.overrideYAxis({ paneId: CANDLE_PANE, createRange: fitLatestBox(boxesRef) });
     // A mark's or a box's details show while the crosshair is on it (the action gives the crosshair's x and y).
     chart.subscribeAction('onCrosshairChange', (data) => {
       const { x, y } = (data as Crosshair | undefined) ?? {};
@@ -424,8 +423,8 @@ export function StockChart({
         },
       });
     }
-    // The price range follows the boxes of the new holding period.
-    chart.overrideYAxis({ paneId: CANDLE_PANE, createRange: fitBoxes(boxesRef) });
+    // The price range follows the latest box of the new holding period.
+    chart.overrideYAxis({ paneId: CANDLE_PANE, createRange: fitLatestBox(boxesRef) });
   }, [boxes, market, theme, st]);
 
   useEffect(() => {

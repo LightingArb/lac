@@ -102,6 +102,7 @@ import {
   latestRange,
   memberTrades,
   openingView,
+  priceAxis,
   rangeBoxes,
   searchFunds,
   searchStocks,
@@ -853,6 +854,37 @@ test('Stocks: past boxes run from a report to the next one without overlapping, 
   const view = openingView(candles, reports);
   assert.ok(view.past >= 260 && view.past <= 262, `${view.past} candles in the last year`);
   assert.equal(view.future, weekdays(STOCKS_DEMO_TODAY, addDays(reports.at(-1)!.date, 91)).length);
+});
+test('Stocks: the price axis covers the candles in view and the latest box; past boxes beyond them are cut off', () => {
+  const { candles, reports } = stockSeries(stockByCode('2330')!);
+  const last = candles.length - 1;
+  // The candles' own range between two indexes (what KLineChart gives the axis before the boxes).
+  const own = (from: number, to: number) => {
+    const shown = candles.slice(Math.max(0, from), to + 1);
+    return { from: Math.min(...shown.map((c) => c.low)), to: Math.max(...shown.map((c) => c.high)) };
+  };
+  const view = openingView(candles, reports);
+  const opening = { from: last + 1 - view.past, to: last + view.future };
+  for (const holding of HOLDINGS) {
+    const boxes = rangeBoxes(reports, candles, holding);
+    const latest = boxes.at(-1)!.range;
+    const candlesInView = own(opening.from, opening.to);
+    assert.deepEqual(priceAxis(candlesInView, boxes, opening), {
+      from: Math.min(candlesInView.from, latest.lower),
+      to: Math.max(candlesInView.to, latest.upper),
+    }, `${holding} opening view`);
+  }
+  // At Q+12 a past box in view reaches well above: it is cut off, not fitted.
+  const q12 = rangeBoxes(reports, candles, 'Q+12');
+  const axis = priceAxis(own(opening.from, opening.to), q12, opening);
+  const cut = q12.filter((b) => !b.latest && b.end >= opening.from && (b.range.upper > axis.to || b.range.lower < axis.from));
+  assert.ok(cut.length > 0, 'a past box in view goes beyond the axis');
+  // Dragged back to 2024, away from the latest box: only the candles, whatever past boxes are there.
+  assert.deepEqual(priceAxis(own(100, 400), q12, { from: 100, to: 400 }), own(100, 400));
+  // Dragged so the last candle is at the left edge: still the latest box.
+  const latest = q12.at(-1)!.range;
+  const ahead = priceAxis(own(last, last), q12, { from: last, to: last + 300 });
+  assert.deepEqual(ahead, { from: Math.min(candles[last].low, latest.lower), to: Math.max(candles[last].high, latest.upper) });
 });
 test('Stocks: the list and the figures show the latest report; upside = fair ÷ price − 1; no chance, no win rate', () => {
   for (const stock of DEMO_STOCKS) {
