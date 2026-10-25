@@ -1,0 +1,166 @@
+.detail {
+  flex: 1 1 420px;
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.empty {
+  padding: 48px 28px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.inner {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px 24px 48px;
+}
+
+@container (max-width: 639px) {
+  .detail {
+    flex: none;
+    overflow: visible;
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
+  }
+
+  .inner {
+    padding: 20px 16px 40px;
+  }
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.meta {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+/* Scoreboard */
+
+.board {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+}
+
+.boardStatus {
+  display: flex;
+  justify-content: center;
+}
+
+.boardTeams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.boardTeam {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.avatarA,
+.avatarB {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.avatarA {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.avatarB {
+  background: #fef9c3;
+  color: #713f12;
+}
+
+.boardScore {
+  font-size: 24px;
+  font-weight: 700;
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+/* Market groups */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.groupTitle {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.groupCount {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lines {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+}
+
+.line {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.line:last-child {
+  border-bottom: 0;
+}
+
+.lineTitle {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.outcomes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.note {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}

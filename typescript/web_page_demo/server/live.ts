@@ -34,6 +34,121 @@ LEFT JOIN m_live.m02_clob_price AS p ON m.market_id = p.market_id
 ORDER BY m.event_id, o.outcome_index
 `;
 
+// Sports page: open events with exactly two teams; the league is the event's sport.sport.
+const TWO_TEAMS = 'JSONB_ARRAY_LENGTH(e.teams) = 2';
+
+export const SPORTS_LEAGUES = `
+SELECT
+    COUNT(*)::int AS count,
+    e.sport ->> 'sport' AS code,
+    MIN(e.sport ->> 'name') AS name
+FROM m_live.m01_event AS e
+WHERE ${OPEN} AND ${TWO_TEAMS}
+GROUP BY e.sport ->> 'sport'
+ORDER BY count DESC, code ASC NULLS LAST
+`;
+
+const SPORTS_GAME = `e.event_id,
+    e.title,
+    e.score,
+    e.live,
+    e.ended,
+    e.period,
+    e.elapsed,
+    e.game_start_at,
+    e.sport ->> 'sport' AS league_code,
+    e.sport ->> 'name' AS league_name,
+    (
+        SELECT
+            JSONB_AGG(
+                JSONB_BUILD_OBJECT(
+                    'name', t.team ->> 'name', 'abbreviation', t.team ->> 'abbreviation'
+                ) ORDER BY t.i
+            )
+        FROM JSONB_ARRAY_ELEMENTS(e.teams) WITH ORDINALITY AS t (team, i)
+    ) AS teams,
+    (
+        SELECT COUNT(*)::int FROM m_live.m01_market AS m
+        WHERE m.event_id = e.event_id AND ${MARKET_OPEN}
+    ) AS market_count`;
+
+// In play first, then not started by start time (unknown last), ended last; keyset on (rank, start, event_id).
+export const SPORTS_EVENTS = `
+WITH games AS MATERIALIZED (
+    SELECT
+        e.event_id,
+        e.game_start_at,
+        CASE WHEN e.live THEN 0 WHEN e.ended THEN 2 ELSE 1 END AS status_rank
+    FROM m_live.m01_event AS e
+    WHERE
+        ${OPEN} AND ${TWO_TEAMS}
+        AND ($1::text [] IS NULL OR COALESCE(e.sport ->> 'sport', '') = ANY($1::text []))
+        AND (
+            $2 = '' OR e.title ILIKE '%' || $2 || '%'
+            OR EXISTS (
+                SELECT 1 FROM JSONB_ARRAY_ELEMENTS(e.teams) AS t (team)
+                WHERE t.team ->> 'name' ILIKE '%' || $2 || '%'
+            )
+        )
+)
+
+SELECT
+    g.status_rank,
+    ${SPORTS_GAME},
+    TO_CHAR(g.game_start_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS start_key
+FROM games AS g
+INNER JOIN m_live.m01_event AS e ON g.event_id = e.event_id
+WHERE
+    $3::int IS NULL
+    OR g.status_rank > $3::int
+    OR (
+        g.status_rank = $3::int AND (
+            (
+                $4::timestamptz IS NOT NULL AND (
+                    g.game_start_at > $4::timestamptz OR g.game_start_at IS NULL
+                    OR (g.game_start_at = $4::timestamptz AND g.event_id > $5)
+                )
+            )
+            OR ($4::timestamptz IS NULL AND g.game_start_at IS NULL AND g.event_id > $5)
+        )
+    )
+ORDER BY g.status_rank ASC, g.game_start_at ASC NULLS LAST, g.event_id ASC LIMIT 51
+`;
+
+export const SPORTS_EVENT = `
+SELECT
+    ${SPORTS_GAME}
+FROM m_live.m01_event AS e
+WHERE
+    ${OPEN} AND ${TWO_TEAMS}
+    AND e.event_id = $1
+`;
+
+// Buy price of each outcome: first outcome best_ask, second 1 − first best_bid (numeric, NULL stays NULL).
+export const SPORTS_MARKETS = `
+SELECT
+    m.event_id,
+    m.market_id,
+    m.sports_market_type,
+    m.sort_order,
+    m.group_title,
+    m.question,
+    m.line::text AS line,
+    m.liquidity::text AS liquidity,
+    o.outcome_index,
+    o.label,
+    (${ASK})::text AS buy
+FROM m_live.m01_market AS m INNER JOIN m_live.m01_outcome AS o ON m.market_id = o.market_id
+LEFT JOIN m_live.m02_clob_price AS p ON m.market_id = p.market_id
+WHERE
+    m.event_id = ANY($1::text []) AND ${MARKET_OPEN}
+    AND ($2::text [] IS NULL OR m.sports_market_type = ANY($2::text []))
+ORDER BY m.event_id, m.sort_order, m.market_id, o.outcome_index LIMIT 20001
+`;
+
+/** Market types the list shows; the detail shows every open market. */
+const LIST_TYPES = ['moneyline', 'spreads', 'totals'];
+
 // The grid is at most 1,440 equal-width buckets per market, including empty buckets.
 // Last non-null minute in each bucket wins; no_data/error/pending never supply points.
 export const HISTORY = `
@@ -446,6 +561,73 @@ ORDER BY m.sort_order, m.market_id, o.outcome_index LIMIT 10001
             const bounds = points.rows[0];
             respond(200, { histories, firstAt: bounds?.first_at ?? null, startAt: bounds?.start_at ?? null,
               endAt: bounds?.end_at ?? null, stepMinutes: bounds?.step_minutes ?? 1 });
+          } else if (url.pathname === '/sports/leagues') {
+            respond(200, { leagues: (await query(SPORTS_LEAGUES)).rows });
+          } else if (url.pathname === '/sports/events') {
+            // An event without a league is ''; no league parameter means every league.
+            const leagues = url.searchParams.getAll('league');
+            if (leagues.length > 400 || leagues.some((code) => !/^[a-z0-9-]{0,40}$/.test(code))) {
+              respond(400, { error: 'Invalid league' });
+              return;
+            }
+            const search = (url.searchParams.get('q') ?? '').slice(0, 200);
+            const encoded = url.searchParams.get('cursor');
+            let cursor: { r: number; t: string | null; id: string } | null = null;
+            if (encoded) {
+              try {
+                cursor = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+              } catch {
+                respond(400, { error: 'Invalid cursor' });
+                return;
+              }
+              if (
+                !cursor ||
+                ![0, 1, 2].includes(cursor.r) ||
+                typeof cursor.id !== 'string' ||
+                !/^\d+$/.test(cursor.id) ||
+                (cursor.t !== null &&
+                  (typeof cursor.t !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(cursor.t)))
+              ) {
+                respond(400, { error: 'Invalid cursor' });
+                return;
+              }
+            }
+            const result = await query(SPORTS_EVENTS, [
+              leagues.length ? leagues : null,
+              search,
+              cursor?.r ?? null,
+              cursor?.t ?? null,
+              cursor?.id ?? null,
+            ]);
+            const page = result.rows.slice(0, 50);
+            const markets = page.length
+              ? await query(SPORTS_MARKETS, [page.map((event) => event.event_id), LIST_TYPES])
+              : { rows: [] };
+            if (markets.rows.length > 20000) {
+              respond(503, { error: 'This game page exceeds the display limit' });
+              return;
+            }
+            const last = page.at(-1);
+            const next =
+              result.rows.length > 50 && last
+                ? Buffer.from(JSON.stringify({ r: last.status_rank, t: last.start_key, id: last.event_id })).toString(
+                    'base64url',
+                  )
+                : null;
+            const events = page.map(({ status_rank: _rank, start_key: _key, ...event }) => event);
+            respond(200, { events, markets: markets.rows, next });
+          } else if (url.pathname === '/sports/event' && id && /^\d+$/.test(id)) {
+            const event = await query(SPORTS_EVENT, [id]);
+            if (!event.rows.length) {
+              respond(404, { error: 'Game is no longer open in the current scan' });
+              return;
+            }
+            const markets = await query(SPORTS_MARKETS, [[id], null]);
+            if (markets.rows.length > 20000) {
+              respond(503, { error: 'This game exceeds the display limit' });
+              return;
+            }
+            respond(200, { event: event.rows[0], markets: markets.rows });
           } else respond(404, { error: 'Unknown Live endpoint' });
         } catch (error) {
           console.error('Live reader failed', error instanceof Error ? error.message : 'unknown');

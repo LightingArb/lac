@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { useT } from '../../i18n';
 import { cx } from '../../lib/cx';
 import { Icon } from '../ui/Icon';
@@ -16,9 +16,15 @@ interface TopBarProps {
   onOpenMenu?: () => void;
   /** Narrow screens on the Signal page: opens the signals drawer. */
   signals?: { count: number; onOpen: () => void } | null;
+  /** Screens too narrow for the terminal column (Signal page, Demo): opens the terminal drawer. */
+  onOpenTerminal?: (() => void) | null;
+  /** Search placeholder and accessible name; defaults to searching markets. */
+  searchLabel?: string;
+  /** Page controls at the right end, after the search (Sports: odds format). */
+  actions?: ReactNode;
 }
 
-export function TopBar({ trail, current, search, onOpenMenu, signals }: TopBarProps) {
+export function TopBar({ trail, current, search, onOpenMenu, signals, onOpenTerminal, searchLabel, actions }: TopBarProps) {
   const t = useT();
   return (
     <div className={styles.topBar}>
@@ -51,6 +57,18 @@ export function TopBar({ trail, current, search, onOpenMenu, signals }: TopBarPr
           <span>{signals.count}</span>
         </button>
       )}
+      {onOpenTerminal && (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-label={t.topBar.terminal}
+          className={styles.signalsButton}
+          onClick={onOpenTerminal}
+        >
+          <Icon name="wallet" size={18} strokeWidth={2} />
+          <span>{t.topBar.terminalButton}</span>
+        </button>
+      )}
       {search && (
         <>
           <IconButton label={t.topBar.filter} icon="filter" variant="outline" />
@@ -60,13 +78,14 @@ export function TopBar({ trail, current, search, onOpenMenu, signals }: TopBarPr
               type="search"
               value={search.value}
               onChange={(e) => search.onChange(e.target.value)}
-              placeholder={t.topBar.search}
-              aria-label={t.topBar.search}
+              placeholder={searchLabel ?? t.topBar.search}
+              aria-label={searchLabel ?? t.topBar.search}
               className={styles.searchInput}
             />
           </label>
         </>
       )}
+      {actions}
     </div>
   );
 }

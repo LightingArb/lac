@@ -49,6 +49,19 @@ export function edge(fair: number, price: number): string {
   return `${d >= 0 ? '+' : ''}${d.toFixed(1)}%`;
 }
 
+/** USDC to the cent, e.g. 1904.5 → "1,904.50"; `signed` puts + on gains. */
+export function usdc(n: number | null, signed = false): string {
+  if (n === null) return '—';
+  const text = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${n < 0 ? '-' : signed && n > 0 ? '+' : ''}${text}`;
+}
+
+/** Percent change to two decimals, e.g. "+16.67%". */
+export function signedPercent(n: number | null): string {
+  if (n === null) return '—';
+  return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+}
+
 export function price(p: number): string {
   return p.toFixed(2);
 }

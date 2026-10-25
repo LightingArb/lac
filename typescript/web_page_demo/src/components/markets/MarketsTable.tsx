@@ -1,5 +1,5 @@
 import type { MarketEvent, Outcome } from '../../data/catalog';
-import { marketAnchorId, type PricedSignal } from '../../lib/markets';
+import { marketAnchorId, sideLabel, type Highlight } from '../../lib/markets';
 import { cx } from '../../lib/cx';
 import { useT } from '../../i18n';
 import { cents, chance, money } from '../../lib/format';
@@ -8,15 +8,15 @@ import styles from './MarketsTable.module.css';
 interface MarketsTableProps {
   event: MarketEvent;
   outcomes: Outcome[];
-  highlight: PricedSignal | null;
+  highlight: Highlight | null;
 }
 
 /** Prediction page: each outcome with its chance and Yes/No buy buttons. */
 export function MarketsTable({ event, outcomes, highlight }: MarketsTableProps) {
   const t = useT();
   const multi = event.kind === 'multi';
-  const yesLabel = multi ? 'Yes' : (event.yesLabel ?? 'Yes');
-  const noLabel = multi ? 'No' : (event.noLabel ?? 'No');
+  const yesLabel = sideLabel(event, 'yes');
+  const noLabel = sideLabel(event, 'no');
 
   return (
     <div className={styles.table}>

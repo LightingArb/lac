@@ -393,9 +393,16 @@ Normal 插入使用 `ON CONFLICT (market_id, day) DO NOTHING`。只有 success �
 - 走勢圖依市場讀 `m_historical.m01_price_day` 的 success 日陣列，第 1 格為 00:00 UTC，每格一分鐘；只讀完整 UTC 日。null、no_data、error 與未抓取日期都是缺口，不補點、不連線。Yes 按 label 對到 outcome_index；第二結果以 1 減第一結果推導，不把最新報價接上歷史線。
 - 1H／6H／1D／1W／1M／All 的終點是所選市場最後有資料的一分鐘；一次最多 50 個市場，每條線最多 1,440 點。超過一天在伺服器分成等寬時間桶，每桶取最後一個非 null 值，全空桶保留缺口；圖下標示選取資料區間的 UTC 起訖。
 - 體育議題的 teams 剛好兩隊才顯示比賽版型，依陣列順序顯示 name 與大寫 abbreviation，不標主客、不推論勝負。score 整串原樣顯示；live=true 顯示 LIVE、period 與 elapsed，否則 ended=true 顯示已結束，其餘顯示 game_start_at 的開賽時間。
-- 雙方機率只在整個議題有且僅有一個進行中的 moneyline 市場、兩個結果 label 完全符合兩隊 name 時顯示，用各自中間價並按隊伍順序對應；否則卡片顯示一般議題的前三個選項。這項判斷獨立於市場分頁。
+- 雙方機率只在整個議題有且僅有一個進行中的 moneyline 市場、它的兩個結果 label 各自對到一隊時顯示：一隊的 name 或 alias 等於 label 就算對到，每隊要剛好對到一個結果，兩隊對到不同的結果；用各自中間價並按隊伍順序對應。大學美式足球的 label 是 alias（例如隊名 `Ragin' Cajuns`、alias `Louisiana`，moneyline 的 label 是 `Louisiana`）。對不到時卡片顯示一般議題的前三個選項。這項判斷獨立於市場分頁。
 - 隱藏低流動性：隱藏 liquidity 小於 25,000 或未知的市場；被選中的訊號那一列一定保留。
-- 表不存在或查詢失敗時顯示錯誤。Live 的 Signal 資料尚未提供，掛單簿畫面與 m_api 不屬於此範例讀取範圍。
+- Sports 頁只讀 `m01_event`、`m01_market`、`m01_outcome`、`m02_clob_price`：
+  - 賽事：議題 `in_current_scan AND active AND NOT closed AND NOT archived`，而且 `teams` 剛好兩隊。聯賽是議題 `sport` 的 `sport`（代碼）與 `name`；沒有的歸「其他」。運動由頁面程式的固定對照表決定（§5）。
+  - 排序：`live=true` 第一組、`ended=true` 最後一組、其他在中間；同一組照 `game_start_at`（null 排最後），再照 `event_id`。每頁 50 場，用（組別、開賽時間、event_id）游標翻頁。搜尋比對標題與兩隊的 name，搜尋時不限聯賽。
+  - 市場：議題底下進行中的市場（同上條件）。列表只讀 `sports_market_type` 是 moneyline、spreads、totals 的；詳情讀全部。
+  - 買進價在 SQL 用 numeric 算：第一個結果是 `best_ask`，第二個結果是 `1 − best_bid`；沒有價格列或那一邊是 null，買進價就是 null，畫面顯示「—」。賠率由瀏覽器換算（§5）。
+  - 讓分、大小分的主線：liquidity 最大的那條，一樣大照 `sort_order`、再照 `market_id`；liquidity 是 null 的排最後。
+  - 端點：`/api/live/sports/leagues`（聯賽與場數）、`/api/live/sports/events?league=&q=&cursor=`（列表；`league` 可以重複，沒有聯賽的議題用空字串）、`/api/live/sports/event?id=`（詳情）。
+- 表不存在或查詢失敗時顯示錯誤。Live 的 Signal 資料尚未提供，交易終端只有 Demo；掛單簿畫面與 m_api 不屬於此範例讀取範圍。
 
 ## 5｜畫面
 
@@ -404,24 +411,38 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 範例網站就是畫面規格：`npm run dev` 打開後每一頁都可以點。參考網站：[polym.trade](https://polym.trade/)。
 
 ```txt
-┌──────────┬────────────────────┬────────────────────┬──────────┐
-│ 左左      │ 左中                │ 右中                │ 右右      │
-│ 選單      │ 議題列表            │ 議題詳情            │ 訊號欄    │
-│ 可摺疊    │                    │                    │ 可摺疊    │
-└──────────┴────────────────────┴────────────────────┴──────────┘
+┌──────────┬────────────────────┬────────────────────┬──────────┬──────────┐
+│ 左左      │ 左中                │ 右中                │ 右右      │ 交易終端  │
+│ 選單      │ 議題列表            │ 議題詳情            │ 訊號欄    │ 客戶帳戶  │
+│ 可摺疊    │                    │                    │ 可摺疊    │ 可摺疊    │
+└──────────┴────────────────────┴────────────────────┴──────────┴──────────┘
 ```
 
-| 欄             | 內容                                                                                                                                                                                              |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 左左（可摺疊） | 上方入口，一行一項：Prediction、Signal、Buy USDT、Stocks、Products、Referral rewards。中間是目前入口的分類，每項顯示議題數。最下方是 Settings、登入、語言切換（EN／繁中）                         |
-| 左中           | 議題卡片列表。上方是麵包屑、篩選、搜尋。每張卡片：圖示與標題、結束時間、前三個選項的價格（¢）與倍數（×）；比賽類顯示比分與雙方機率                                                                |
-| 右中           | 議題詳情：標題、標籤、開始與結束時間、24 小時與總成交量；走勢圖（1H／6H／1D／1W／1M／All，每個選項一條線）；Markets 選項表，每列顯示 Chance 與 Yes／No 買入按鈕，可隱藏低流動性市場               |
-| 右右（可摺疊） | 只在 Signal 出現。分類分頁（只顯示客戶有權益的）、排序（Latest／EV／ROI／Depth／Expiry）。每張卡片：分類 · 標的、選項、YES／NO、EV、Entry、Fair（差距 %）、Avg. Cost（depth）、更新時間、剩餘時間 |
+| 欄                 | 內容                                                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 左左（可摺疊）     | 上方入口，一行一項：Prediction、Signal、Sports、Buy USDT、Stocks、Products、Referral rewards。中間是目前入口的分類，每項顯示議題數（Sports 是運動 → 聯賽與場數）。最下方是 Settings、登入、語言切換（EN／繁中） |
+| 左中               | 議題卡片列表。上方是麵包屑、篩選、搜尋。每張卡片：圖示與標題、結束時間、前三個選項的價格（¢）與倍數（×）；比賽類顯示比分與雙方機率                                                                |
+| 右中               | 議題詳情：標題、標籤、開始與結束時間、24 小時與總成交量；走勢圖（1H／6H／1D／1W／1M／All，每個選項一條線）；Markets 選項表，每列顯示 Chance 與 Yes／No 買入按鈕，可隱藏低流動性市場               |
+| 右右（可摺疊）     | 只在 Signal 出現。分類分頁（只顯示客戶有權益的）、排序（Latest／EV／ROI／Depth／Expiry）。每張卡片：分類 · 標的、選項、YES／NO、EV、Entry、Fair（差距 %）、Avg. Cost（depth）、更新時間、剩餘時間 |
+| 交易終端（可摺疊） | 只在 Signal 出現，在右右的右邊。客戶的錢包、帳戶摘要，以及持倉／訂單／交易三個分頁，見下面「交易終端」                                                                                            |
+
+**交易終端（Signal 最右邊一欄）：** 參考 MT5 手機 app 的「交易」與「歷史」頁。範例只有 Demo 假資料（[src/data/terminal.ts](typescript/web_page_demo/src/data/terminal.ts)），Live 的 Signal 沒有這一欄；正式版接上客人真的錢包，LAC 只請錢包簽名，不拿私鑰。
+
+- **位置：** Signal 頁右右的右邊，跟訊號欄一樣可以摺疊；螢幕寬度低於 1600px 變成抽屜，從上方列的「終端」按鈕打開。Prediction 與 Sports 沒有這一欄。
+- **錢包列：** 已連線錢包的縮短地址（例如 `0x12ab…89cd`）、「Demo」標籤、鎖住的「中斷連線」。
+- **帳戶摘要**（一行一項，名稱靠左、數字靠右，中間點線）：結餘＝錢包裡的 USDC；淨值＝結餘＋全部持倉現值；可用＝結餘－掛著的買單佔用（每張買單：掛單價 × 還沒成交的份數；賣單不佔用現金）；未實現損益＝全部持倉損益加總，賺綠賠紅。金額到小數點後 2 位。
+- **持倉：** 議題標題與選項、Yes／No（照結果的 label，例如 Up、Celtics）、份數、平均成本、現價、現值、損益（金額與百分比，賺綠賠紅）。現值＝份數 × 現價；損益＝現值－份數 × 平均成本；損益百分比＝損益 ÷（份數 × 平均成本）。現價是那個結果現在的 Yes／No 價格；已經結算的部位用結算價（贏 100¢、輸 0¢），贏的標「可贖回」。點一列 → 左中、右中跳到那個議題，對應的 Yes 或 No 按鈕變黃，跟點訊號一樣。
+- **訂單：** 議題與選項、買或賣、Yes／No、掛單價、份數、已成交份數、掛單時間。
+- **交易：** 由新到舊；時間、類型（買入、賣出、贖回、入金、出金）、議題與選項、Yes／No、價格、份數、金額（入帳綠、出帳紅）。
+- **沒有資料：** 中間一個空盒圖示加一行字（沒有持倉、沒有掛單、還沒有交易紀錄）。
+- **鎖住的按鈕：** 中斷連線、平倉、TP／SL（付費服務）、贖回（只在可贖回的持倉）、取消掛單。看得到、按不了，滑過去或點了顯示「之後開放」。平倉是一筆帶 builder code 的下單（§7.5）。
+- 價格用 ¢，跟其他畫面一樣。
 
 **入口：**
 
 - **Prediction：** Polymarket 全部議題，沒有訊號欄。
-- **Signal：** LAC 有在算的議題。分類最上面是 Trending（現在有訊號的議題），下面是 Weather、Crypto、Forex、Future、Sport；客戶沒有權益、或那一類現在沒有訊號，就不顯示。中間兩欄跟 Prediction 完全一樣，多了右右的訊號欄。
+- **Signal：** LAC 有在算的議題。分類最上面是 Trending（現在有訊號的議題），下面是 Weather、Crypto、Forex、Future、Sport；客戶沒有權益、或那一類現在沒有訊號，就不顯示。中間兩欄跟 Prediction 完全一樣，多了右右的訊號欄；最右邊有交易終端。
+- **Sports：** Polymarket 的體育賽事與賠率，照運動 → 聯賽分類，見下面「Sports 頁」。不放訊號、不算 EV，沒有訊號欄與交易終端。
 - **Buy USDT：** 一行，黑色粗體。點開是合作網站清單（名稱、付款方式、手續費、最低金額、支援的鏈、外連按鈕），規則見 §7.6。
 - **Stocks：** 先留位置，不啟動。
 - **Products：** 方案卡片與月／季／年切換，每張訊號方案顯示「包含：…」（來自目前上架的版本，§7.1）；底部有兌換碼。
@@ -431,11 +452,51 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 **互動：**
 
 - 左左選分類 → 左中列出議題 → 點議題 → 右中顯示詳情。
-- 在 Signal 點右右的一張訊號 → 左中跳到那個議題，右中捲到那個選項，**對應的 Yes 或 No 按鈕變黃底黃框**，那一列淡黃底。訊號靠 Polymarket 編號對到市場（§6）。
+- 在 Signal 點右右的一張訊號 → 左中跳到那個議題，右中捲到那個選項，**對應的 Yes 或 No 按鈕變黃底黃框**，那一列淡黃底。訊號靠 Polymarket 編號對到市場（§6）。點交易終端的一個持倉也一樣。
+- Sports：左左選運動或聯賽 → 左中列出賽事 → 點一場 → 右中顯示這場全部的市場。
+
+**Sports 頁：**
+
+- **賽事：** 進行中（議題與市場都 `in_current_scan AND active AND NOT closed AND NOT archived`），而且 `teams` 剛好兩隊的議題。Polymarket 把同一場比賽的部分盤口放在另一個議題（例如標題後面是 ` - More Markets`、` - Total Corners`），這些也各自是一列。
+- **運動與聯賽：** 聯賽是議題的 `sport`（例如 `{"sport":"nhl","name":"NHL"}`）。Polymarket 沒有「運動」這一層，由頁面程式的固定對照表（[src/lib/sports.ts](typescript/web_page_demo/src/lib/sports.ts) 的 `SPORT_LEAGUES`）把聯賽代碼對到運動；表裡沒有的聯賽、或議題沒有 `sport`，放「其他」。左左最上面是「全部運動」，點一個運動會在它下面列出聯賽與場數。對照表照 2026-10-25 本機 `lac_data` 進行中兩隊議題的 230 個聯賽代碼建立：
+
+| 運動 | 聯賽代碼（`sport.sport`） |
+| --- | --- |
+| 足球（`soccer`） | `acle` `arg` `argcopa` `argpn` `atc` `auc` `aus` `aut` `aze1` `aze2` `bel1` `bel2` `bl2` `bl3` `blr1` `bol1` `bra` `bra2` `bra3` `brco` `bul` `bun` `canpl` `cdr` `chi` `chi1` `chi2` `chl2` `clf` `col` `col1` `col2` `conl` `cze1` `den` `dfb` `ecu1` `efa` `efl` `egy1` `el1` `el2` `elc` `enl` `epl` `ere` `es2` `es3` `est1` `fif` `fin1` `fl1` `fpd` `fr2` `grc` `gre1` `gtm` `hr1` `hun` `idn1` `idn2` `irl1` `isl1` `isp` `isr` `itc` `itsb` `ja2` `ja3` `jap` `kaz1` `kor` `kor2` `lal` `lec` `ltu1` `lva1` `mar1` `mex` `mex2` `mls` `ned2` `nirl1` `nlc` `nls` `nor` `nor2` `nwsl` `par1` `per1` `pol` `por` `pt2` `ptc` `rou1` `rus` `sclc` `scoc` `scop` `sea` `serc` `skc` `slo` `spl` `srb` `sud` `sui` `svk1` `swe` `swe2` `tha1` `trsk` `tur` `tur2` `u20wwc` `uae1` `ucl` `uel` `ukr1` `unl` `uru1` `usl1` `uslc` `usoc` `uwcl` `uwec` `uzb1` `ven1` `wsl` `wsl2` |
+| 籃球（`basketball`） | `nba` `wnba` `euroleague` `bkaba` `bkarg` `bkbbl` `bkbsl` `bkcba` `bkcl` `bkeurocup` `bkfibaqam` `bkfr1` `bkgr1` `bkisrsl` `bkjpn` `bkkbl` `bkkls` `bkligend` `bklkl` `bknbb` `bknbl` `bkplk` `bkseriea` `bkvtb` |
+| 冰球（`hockey`） | `nhl` `ahl` `khl` `shl` `liiga` `dehl` `cehl` `snhl` |
+| 美式足球（`football`） | `nfl` `cfb` |
+| 棒球（`baseball`） | `mlb` `kbo` `npb` `cpbl` `lmb` |
+| 網球（`tennis`） | `atp` `atp-doubles` `wta` `wta-doubles` `itf` |
+| 桌球（`tableTennis`） | `wtt` `setkameua` `setkamecz` `setkamemd` `setkawoua` |
+| 電競（`esports`） | `cs2` `dota2` `lol` `val` `ow` `sc2` `r6siege` `hok` `mlbb` |
+| 板球（`cricket`） | `crint` `cricranji` `cricmukono` `criccsat20w` `cricpsl` `cricshield` `cricjcl` `cricjclt10` `crickerala` `criccoppat10` `criclcl` `cricecsbg` `crictbcl` |
+| 橄欖球（`rugby`） | `rutopft` `ruurc` `ruprem` `rlsuper` |
+| 綜合格鬥（`mma`） | `ufc` |
+| 拳擊（`boxing`） | `boxing` `zuffa` |
+| 排球（`volleyball`） | `vbefeler` `vbligueaw` `vbligueb` `vbliguea` `vbbelligaa` `vbdivisao1` `vbsuperlega` `vbbundesliga` `vbplusliga` `vbsuperliga` |
+| 手球（`handball`） | `hbbundesliga` `hbasobal` `hbhandbold` `hblnh` `hbehfcl` `hbnbi` |
+| 袋棍球（`lacrosse`） | `pll` `wll` |
+| 飛鏢（`darts`） | `pdcdarts` `modus` |
+| 澳式足球（`aussieRules`） | `aflw` |
+| 匹克球（`pickleball`） | `ppa-doubles` |
+| 其他（`other`） | 上面沒有的聯賽代碼，以及沒有 `sport` 的議題 |
+
+- **賽事列表（左中）：** 每場一列：開賽時間（UTC）與聯賽、兩隊（照 `teams` 原順序，縮寫大寫加名稱，不標主客；下面小字是議題標題）、比分或狀態（`live=true` 顯示 LIVE、`period` 與 `elapsed`；`ended=true` 顯示已結束；其他顯示開賽時間；進行中與已結束的再顯示 `score` 原文），以及三種盤各一欄：
+  - **勝負**（`sports_market_type='moneyline'`）：只有一個市場時列出它的兩個結果；有好幾個 Yes／No 市場（足球的主勝、和局、客勝）時，每個市場一行，用它的選項名稱與 Yes 的賠率。
+  - **讓分**（`spreads`）、**大小分**（`totals`）：好幾條線時只放主線：流動性最大的那條，一樣大照 `sort_order`。顯示選項名稱與兩個結果的賠率。
+  - 沒有的盤顯示「—」。
+  - 排序：進行中在前，再來還沒開始的照開賽時間（沒有開賽時間的排最後），已結束的最後。上面的搜尋比對隊名與標題，搜尋時不限運動與聯賽。Live 每頁 50 場。
+- **賽事詳情（右中）：** 聯賽、標題、開賽時間與市場數、兩隊與比分或狀態；這場全部進行中的市場照勝負、讓分、大小分、其他分組，組內照 `sort_order`。每條線顯示 Polymarket 原本的選項名稱（`group_title`，沒有就用 `question`），兩個結果的 label 與賠率，旁邊小字標買進價（¢）。讓分、大小分的線照 Polymarket 原樣顯示，不推算哪一隊讓幾分。
+- **賠率：** 用每個結果的買進價換算。第一個結果的買進價是 `best_ask`；第二個結果是 `1 − 第一個結果的 best_bid`（§4）。右上角切換歐洲盤／美國盤，預設歐洲盤。買進價是 null 顯示「—」。
+  - 歐洲盤 = 1 ÷ 買進價，到小數點後 2 位。
+  - 美國盤：買進價大於 0.5 是 −(價格 ÷ (1 − 價格)) × 100；小於 0.5 是 +((1 − 價格) ÷ 價格) × 100；等於 0.5 是 +100；四捨五入到整數。
+  - 例：62¢ → 1.61／−163；38¢ → 2.63／+163；50¢ → 2.00／+100。
+- **Demo：** [src/data/sports.ts](typescript/web_page_demo/src/data/sports.ts) 的假資料（6 個聯賽、12 場，含進行中、還沒開始、已結束，有的場沒有讓分或大小分）。**Live：** 唯讀本機 `lac_data`，讀法見 §4。
 
 **語言：** 繁體中文與英文都要，左下角或 Settings 切換。Polymarket 的內容（議題標題、選項名稱、標籤）維持原文不翻；我們自己的東西（分類、產品、項目名稱）兩種語言都要有。範例的文案集中在 [typescript/web_page_demo/src/i18n/](typescript/web_page_demo/src/i18n/)。
 
-**尺寸：** 寬螢幕為主，範例已支援手機寬度：低於 768px 選單變抽屜，低於 1200px 訊號欄變抽屜。
+**尺寸：** 寬螢幕為主，範例已支援手機寬度：低於 768px 選單變抽屜，低於 1200px 訊號欄變抽屜，低於 1600px 交易終端變抽屜。
 
 ## 6｜對外 HTTP 介面（m_api）
 

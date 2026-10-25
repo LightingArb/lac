@@ -14,7 +14,8 @@ assert.equal(env.DB_NAME, 'lac_data');
 assert.equal(env.DB_PORT, '5432');
 const dir = mkdtempSync(join(tmpdir(), 'lac-live-sql-'));
 await build({ entryPoints: ['server/live.ts'], bundle: true, platform: 'node', format: 'cjs', external: ['pg-native'], outfile: join(dir, 'reader.cjs') });
-const { BID, ASK, MID, HISTORY, MONEYLINE } = createRequire(import.meta.url)(join(dir, 'reader.cjs'));
+const { BID, ASK, MID, HISTORY, MONEYLINE, SPORTS_LEAGUES, SPORTS_EVENTS, SPORTS_EVENT, SPORTS_MARKETS } =
+  createRequire(import.meta.url)(join(dir, 'reader.cjs'));
 const pool = new Pool({ host: env.DB_HOST, port: Number(env.DB_PORT), database: env.DB_NAME, user: env.DB_USER, password: env.DB_PASSWORD,
   max: 1, options: '-c default_transaction_read_only=on -c statement_timeout=15000 -c timezone=UTC' });
 after(async () => { await pool.end(); rmSync(dir, { recursive: true, force: true }); });
@@ -92,4 +93,76 @@ test('Only one open moneyline per event is eligible, independent of market page'
       .replaceAll('m_live.m01_market', 'test_markets').replaceAll('m_live.m01_outcome', 'test_outcomes').replaceAll('m_live.m02_clob_price', 'test_prices');
   const { rows } = await pool.query(query, [['single', 'many', 'other']]);
   assert.deepEqual(rows.map((row) => [row.event_id, row.label]), [['single', 'Alpha'], ['single', 'Beta']]);
+});
+
+// Sports: synthetic events and markets in VALUES CTEs in place of the m_live tables.
+const two = `'[{"name":"Heat","abbreviation":"mia","logo":"x"},{"name":"Hornets","abbreviation":"cha"}]'::jsonb`;
+const leafs = `'[{"name":"Maple Leafs","abbreviation":"tor"},{"name":"Canadiens","abbreviation":"mtl"}]'::jsonb`;
+const three = `'[{"name":"A"},{"name":"B"},{"name":"C"}]'::jsonb`;
+const nba = `'{"sport":"nba","name":"NBA"}'::jsonb`;
+const nhl = `'{"sport":"nhl","name":"NHL"}'::jsonb`;
+const epl = `'{"sport":"epl","name":"Premier League"}'::jsonb`;
+const sportsData = `WITH test_events(event_id,title,sport,teams,score,live,ended,period,elapsed,game_start_at,in_current_scan,active,closed,archived) AS (VALUES
+  ('1','Live late',${nba},${two},'78-71',true,false,'Q3','05:12',TIMESTAMPTZ '2026-10-21 23:30Z',true,true,false,false),
+  ('2','Live early',${nba},${two},'1-0',true,NULL::boolean,'Q1','',TIMESTAMPTZ '2026-10-21 20:00Z',true,true,false,false),
+  ('3','Upcoming B',${nhl},${two},NULL,NULL::boolean,NULL::boolean,NULL,NULL,TIMESTAMPTZ '2026-10-22 02:00Z',true,true,false,false),
+  ('4','Upcoming A',${nhl},${two},NULL,false,false,NULL,NULL,TIMESTAMPTZ '2026-10-22 02:00Z',true,true,false,false),
+  ('5','No start',${epl},${two},NULL,NULL,NULL,NULL,NULL,NULL::timestamptz,true,true,false,false),
+  ('6','Ended',${nba},${two},'101-99',false,true,'F',NULL,TIMESTAMPTZ '2026-10-20 00:00Z',true,true,false,false),
+  ('7','No league',NULL::jsonb,${two},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-23 00:00Z',true,true,false,false),
+  ('8','Three teams',${nba},${three},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-22 01:00Z',true,true,false,false),
+  ('9','Closed',${nba},${two},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-22 01:00Z',true,true,true,false),
+  ('10','Toronto at Montreal',${nhl},${leafs},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-22 05:00Z',true,true,false,false)
+), test_markets(event_id,market_id,in_current_scan,active,closed,archived) AS (VALUES
+  ('1','m1',true,true,false,false),('1','m2',true,true,true,false)
+), `;
+const sportsSql = (sql) => {
+  const body = sql.trim().replaceAll('m_live.m01_event', 'test_events').replaceAll('m_live.m01_market', 'test_markets');
+  return body.startsWith('WITH ') ? sportsData + body.slice(5) : sportsData.replace(/, $/, ' ') + body;
+};
+test('Sports games: two teams and open only; in play, then by start (unknown last), ended last; keyset continues', async () => {
+  const events = sportsSql(SPORTS_EVENTS);
+  const { rows } = await pool.query(events, [null, '', null, null, null]);
+  assert.deepEqual(rows.map((row) => row.event_id), ['2', '1', '3', '4', '10', '7', '5', '6']);
+  assert.deepEqual(rows[1].teams, [{ name: 'Heat', abbreviation: 'mia' }, { name: 'Hornets', abbreviation: 'cha' }]);
+  assert.deepEqual([rows[1].league_code, rows[1].league_name, rows[1].market_count], ['nba', 'NBA', 1]);
+  assert.equal(rows[3].start_key, '2026-10-22T02:00:00.000000Z');
+  const after = async (row) => (await pool.query(events, [null, '', row.status_rank, row.start_key, row.event_id])).rows.map((r) => r.event_id);
+  assert.deepEqual(await after(rows[1]), ['3', '4', '10', '7', '5', '6']);
+  assert.deepEqual(await after(rows[2]), ['4', '10', '7', '5', '6']);
+  assert.deepEqual(await after(rows[6]), ['6']);
+  assert.deepEqual(await after(rows[7]), []);
+  const ids = async (leagues, q) => (await pool.query(events, [leagues, q, null, null, null])).rows.map((r) => r.event_id);
+  assert.deepEqual(await ids(['nba'], ''), ['2', '1', '6']);
+  assert.deepEqual(await ids(['nhl', 'epl'], ''), ['3', '4', '10', '5']);
+  assert.deepEqual(await ids([''], ''), ['7']);
+  assert.deepEqual(await ids(null, 'leafs'), ['10']);
+  assert.deepEqual(await ids(null, 'upcoming a'), ['4']);
+  assert.deepEqual((await pool.query(sportsSql(SPORTS_LEAGUES))).rows.map((r) => [r.code, r.name, r.count]),
+    [['nba', 'NBA', 3], ['nhl', 'NHL', 3], ['epl', 'Premier League', 1], [null, null, 1]]);
+  assert.equal((await pool.query(sportsSql(SPORTS_EVENT), ['8'])).rows.length, 0);
+  assert.equal((await pool.query(sportsSql(SPORTS_EVENT), ['1'])).rows[0].title, 'Live late');
+});
+test('Sports buy prices are numeric: first outcome best_ask, second 1 − first best_bid; null stays null', async () => {
+  const query = `WITH test_markets(event_id,market_id,sports_market_type,sort_order,group_title,question,line,liquidity,in_current_scan,active,closed,archived) AS (VALUES
+    ('e','a','moneyline',0,'','Heat vs. Hornets',NULL::numeric,412000.5::numeric,true,true,false,false),
+    ('e','b','spreads',1,'Heat (-4.5)','Spread: Heat (-4.5)',-4.5,10,true,true,false,false),
+    ('e','c','totals',2,'O/U 221.5','O/U 221.5',221.5,10,true,true,false,false),
+    ('e','d','first_half_totals',3,'1H O/U 110.5','1H',110.5,10,true,true,false,false),
+    ('e','x','totals',4,'closed','closed',1,10,true,true,true,false)),
+    test_outcomes(market_id,outcome_index,label) AS (VALUES ('a',0,'Heat'),('a',1,'Hornets'),('b',0,'Heat'),('b',1,'Hornets'),
+      ('c',0,'Over'),('c',1,'Under'),('d',0,'Over'),('d',1,'Under'),('x',0,'Over'),('x',1,'Under')),
+    test_prices(market_id,best_bid,best_ask) AS (VALUES ('a',0.123456789012345678::numeric,0.62::numeric),('b',NULL,0.4),('d',0.3,0.31)) ` +
+    SPORTS_MARKETS.trim().replaceAll('m_live.m01_market', 'test_markets').replaceAll('m_live.m01_outcome', 'test_outcomes')
+      .replaceAll('m_live.m02_clob_price', 'test_prices');
+  const listed = (await pool.query(query, [['e'], ['moneyline', 'spreads', 'totals']])).rows;
+  assert.deepEqual(listed.map((r) => [r.market_id, r.label, r.buy]), [
+    ['a', 'Heat', '0.62'], ['a', 'Hornets', '0.876543210987654322'],
+    ['b', 'Heat', '0.4'], ['b', 'Hornets', null],
+    ['c', 'Over', null], ['c', 'Under', null],
+  ]);
+  assert.deepEqual([listed[2].line, listed[0].liquidity, listed[0].group_title], ['-4.5', '412000.5', '']);
+  const all = (await pool.query(query, [['e'], null])).rows;
+  assert.deepEqual([...new Set(all.map((r) => r.market_id))], ['a', 'b', 'c', 'd']);
+  assert.deepEqual(all.filter((r) => r.market_id === 'd').map((r) => r.buy), ['0.31', '0.7']);
 });

@@ -116,6 +116,27 @@
 
 .categoryLabel {
   flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A league listed under its sport. */
+.subItem,
+.subItem:hover {
+  height: 36px;
+  padding-left: 22px;
+  font-size: 13px;
+}
+
+.subDot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin: 0 5px;
+  border-radius: 3px;
+  background: var(--color-border-strong);
 }
 
 .categoryCount {

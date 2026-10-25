@@ -13,13 +13,14 @@ type NavKey = keyof Messages['nav'];
 
 interface NavItem {
   to: string;
-  key: NavKey & ('prediction' | 'signal' | 'stocks' | 'products' | 'referral' | 'settings');
+  key: NavKey & ('prediction' | 'signal' | 'sports' | 'stocks' | 'products' | 'referral' | 'settings');
   icon: IconName;
 }
 
 const NAV_TOP: NavItem[] = [
   { to: '/prediction', key: 'prediction', icon: 'prediction' },
   { to: '/signal', key: 'signal', icon: 'signal' },
+  { to: '/sports', key: 'sports', icon: 'sports' },
 ];
 
 const NAV_BOTTOM: NavItem[] = [
@@ -136,10 +137,10 @@ function ExpandedSidebar({
               key={c.id}
               type="button"
               aria-pressed={c.active}
-              className={cx(styles.item, c.active && styles.categoryActive)}
+              className={cx(styles.item, !!c.depth && styles.subItem, c.active && styles.categoryActive)}
               onClick={() => onPickCategory(c.id)}
             >
-              <Icon name={c.icon} />
+              {c.depth ? <span className={styles.subDot} /> : <Icon name={c.icon} />}
               <span className={styles.categoryLabel}>{c.label}</span>
               <span className={styles.categoryCount}>{c.count}</span>
             </button>
@@ -204,7 +205,7 @@ function CollapsedSidebar({ onToggle, onNavigate, onBuyUsdt, categories, onPickC
       {categories && (
         <>
           <span className={styles.railDivider} />
-          {categories.map((c) => (
+          {categories.filter((c) => !c.depth).map((c) => (
             <button
               key={c.id}
               type="button"

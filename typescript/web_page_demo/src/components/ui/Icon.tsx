@@ -48,6 +48,8 @@ const PATHS = {
   weather: 'M7 19h10a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6 1.2A3.4 3.4 0 0 0 7 19zM16 3v1.5M20.6 5.4l-1 1M22 10h-1.5',
   forex: 'M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4',
   future: 'M3 19h18l-3.2-7H6.2zM8 12l1.3-5h5.4L16 12',
+  lock: 'M6 11h12v10H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3',
+  box: 'M3 7.5 12 3l9 4.5v9L12 21l-9-4.5zM3 7.5l9 4.5 9-4.5M12 12v9',
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -2,7 +2,7 @@ import { useState, type ReactNode, type Ref } from 'react';
 import type { MarketEvent } from '../../data/catalog';
 import { useT } from '../../i18n';
 import { money } from '../../lib/format';
-import { type PricedSignal } from '../../lib/markets';
+import { type Highlight } from '../../lib/markets';
 import { Icon, type IconName } from '../ui/Icon';
 import { IconButton } from '../ui/IconButton';
 import { Switch } from '../ui/Switch';
@@ -18,7 +18,7 @@ const LOW_LIQUIDITY = 25_000;
 interface EventDetailProps {
   ref?: Ref<HTMLElement>;
   event: MarketEvent | null;
-  highlight: PricedSignal | null;
+  highlight: Highlight | null;
   footer?: ReactNode;
   error?: string | null;
 }

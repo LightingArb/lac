@@ -22,7 +22,7 @@ export interface LiveEvent {
   m_live_updated_at: string;
   tags: { slug: string; label: string }[];
   market_count: number;
-  teams: { name: string | null; abbreviation: string | null }[] | null;
+  teams: { name: string | null; abbreviation: string | null; alias?: string | null }[] | null;
   score: string | null;
   live: boolean | null;
   ended: boolean | null;
@@ -173,13 +173,24 @@ export function liveEvent(
   };
 }
 
-/** Team names must match the unique open moneyline exactly; order stays with teams. */
+/**
+ * Each team must match exactly one outcome of the unique open moneyline, by its name or its
+ * alias (college football labels use the alias), and the two teams different outcomes; order stays with teams.
+ */
+export function moneylineOutcomes(event: LiveEvent): LiveEvent['moneyline'] | null {
+  const moneyline = event.moneyline;
+  if (event.teams?.length !== 2 || moneyline.length !== 2) return null;
+  const picks = event.teams.map((team) => {
+    const names = [team.name, team.alias].filter((name): name is string => name != null);
+    const found = moneyline.filter((outcome) => names.includes(outcome.label));
+    return found.length === 1 ? found[0] : null;
+  });
+  return picks[0] && picks[1] && picks[0] !== picks[1] ? [picks[0], picks[1]] : null;
+}
+
 export function liveMatch(event: LiveEvent, locale = 'en-US'): MarketEvent['liveMatch'] {
   if (event.teams?.length !== 2) return undefined;
-  const moneyline = event.moneyline;
-  const names = event.teams.map((team) => team.name);
-  const matched = moneyline.length === 2 && names[0] !== names[1] &&
-    names.every((name) => name !== null && moneyline.filter((outcome) => outcome.label === name).length === 1);
+  const matched = moneylineOutcomes(event);
   return {
     teams: event.teams,
     score: event.score,
@@ -188,7 +199,7 @@ export function liveMatch(event: LiveEvent, locale = 'en-US'): MarketEvent['live
     period: event.period,
     elapsed: event.elapsed,
     starts: date(event.game_start_at, { dateStyle: 'medium', timeStyle: 'short' }, locale) + (event.game_start_at ? ' UTC' : ''),
-    probabilities: matched ? names.map((name) => number(moneyline.find((outcome) => outcome.label === name)!.midpoint)) : null,
+    probabilities: matched ? matched.map((outcome) => number(outcome.midpoint)) : null,
   };
 }
 

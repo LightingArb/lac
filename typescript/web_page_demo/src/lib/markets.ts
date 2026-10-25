@@ -12,6 +12,7 @@ import {
   type Side,
   type Signal,
 } from '../data/catalog';
+import { DEMO_ACCOUNT } from '../data/terminal';
 import type { Messages } from '../i18n/en';
 
 export type WorkspaceMode = 'prediction' | 'signal';
@@ -31,7 +32,7 @@ export interface WorkspaceState {
   signalCategory: SignalCategoryId;
   predictionEventId: string;
   signalEventId: string;
-  /** Signal picked in the signal panel; highlighted in the event detail. */
+  /** Signal or terminal position picked on the right; highlighted in the event detail. */
   highlightId: string | null;
   query: string;
 }
@@ -51,6 +52,16 @@ export interface CategoryItem {
   icon: IconName;
   count: number;
   active: boolean;
+  /** 1: listed under the item above it (a league under its sport). */
+  depth?: number;
+}
+
+/** One Yes or No button of one outcome, marked yellow in the event detail. */
+export interface Highlight {
+  id: string;
+  eventId: string;
+  outcomeId: string;
+  side: Side;
 }
 
 export interface Workspace {
@@ -66,8 +77,8 @@ export interface Workspace {
   visibleProducts: Product[];
   signalCountByEvent: Record<string, number>;
   signalByCell: Record<string, PricedSignal>;
-  /** The picked signal, only when it belongs to the selected event. */
-  highlight: PricedSignal | null;
+  /** The picked signal or position, only when it belongs to the selected event. */
+  highlight: Highlight | null;
 }
 
 export const EVENTS_BY_ID: Record<string, MarketEvent> = Object.fromEntries(EVENTS.map((e) => [e.id, e]));
@@ -80,6 +91,13 @@ export function findOutcome(event: MarketEvent, outcomeId: string): Outcome {
 export function fairValue(outcome: Outcome, side: Side): number {
   const fairYes = outcome.fair ?? outcome.yes!;
   return side === 'yes' ? fairYes : 1 - fairYes;
+}
+
+/** Button text of a side: Yes/No on multi-outcome events, the event's own names (Up, Lakers…) on binary ones. */
+export function sideLabel(event: MarketEvent, side: Side): string {
+  const multi = event.kind === 'multi';
+  if (side === 'yes') return multi ? 'Yes' : (event.yesLabel ?? 'Yes');
+  return multi ? 'No' : (event.noLabel ?? 'No');
 }
 
 export function cellKey(eventId: string, outcomeId: string, side: Side): string {
@@ -167,7 +185,10 @@ export function deriveWorkspace(
   const candidate = EVENTS_BY_ID[state.signalEventId];
   const selected =
     candidate?.lac && visibleIds.has(candidate.lac.product) ? candidate : (events[0] ?? covered[0] ?? null);
-  const picked = signals.find((s) => s.id === state.highlightId) ?? null;
+  const picked: Highlight | null =
+    signals.find((s) => s.id === state.highlightId) ??
+    DEMO_ACCOUNT.positions.find((p) => p.id === state.highlightId) ??
+    null;
 
   return {
     ...shared,
@@ -179,4 +200,14 @@ export function deriveWorkspace(
     selected,
     highlight: picked && selected && picked.eventId === selected.id ? picked : null,
   };
+}
+
+/**
+ * Signal page: a click on a signal or a terminal position opens its event and marks its button.
+ * The category stays when it lists that event (Trending lists every event with signals); otherwise Trending.
+ */
+export function focusHighlight(ws: Workspace, cell: Highlight): Partial<WorkspaceState> {
+  const active = ws.activeCategory as SignalCategoryId;
+  const keep = active === 'trending' || active === EVENTS_BY_ID[cell.eventId].lac?.product;
+  return { signalEventId: cell.eventId, highlightId: cell.id, signalCategory: keep ? active : 'trending', query: '' };
 }
