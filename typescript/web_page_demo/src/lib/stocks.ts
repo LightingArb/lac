@@ -1,11 +1,20 @@
 import { AMOUNT_RANGES, CONGRESS_MEMBERS, CONGRESS_TRADES } from '../data/congress';
 import type { CongressMember, CongressTrade, TradeSide } from '../data/congress';
 import { DEMO_FUNDS, type Fund } from '../data/funds';
-import { DEMO_STOCKS, HOLDINGS, STOCKS_DEMO_TODAY, type Holding, type Stock, type StockMarket } from '../data/stocks';
+import { addDays } from '../data/products';
+import {
+  DEMO_STOCKS,
+  HOLDINGS,
+  STOCKS_DEMO_TODAY,
+  quarters,
+  type Holding,
+  type Stock,
+  type StockMarket,
+} from '../data/stocks';
 import type { Messages } from '../i18n/en';
 
-// Stocks page: daily candles drawn from a seed, the fair price per holding period, congress filings and fund
-// holdings. Pure functions over the Demo data, so the page and the tests read the same rules.
+// Stocks page: daily candles and earnings reports drawn from a seed, the range boxes on the chart, congress filings
+// and fund holdings. Pure functions over the Demo data, so the page and the tests read the same rules.
 
 export type StockTab = 'analysis' | 'congress' | 'funds';
 
@@ -32,14 +41,9 @@ export const MAIN_INDICATORS = ['MA', 'BOLL'] as const;
 export const SUB_INDICATORS = ['VOL', 'MACD', 'KDJ', 'RSI'] as const;
 export type StockIndicator = (typeof MAIN_INDICATORS)[number] | (typeof SUB_INDICATORS)[number];
 export const INDICATORS: StockIndicator[] = [...MAIN_INDICATORS, ...SUB_INDICATORS];
-export const DEFAULT_INDICATORS: StockIndicator[] = ['MA', 'VOL'];
+export const DEFAULT_INDICATORS: StockIndicator[] = ['VOL'];
 
-// ---- Fair price ----
-
-export function fairOf(stock: Stock, holding: Holding): { price: number; chance: number } {
-  const i = HOLDINGS.indexOf(holding);
-  return { price: stock.fair[i], chance: stock.chance[i] };
-}
+// ---- Prices ----
 
 /** NT$ with up to two decimals (1,085 or 38.75); US$ always with two (262.35). */
 export function formatPrice(market: StockMarket, value: number): string {
@@ -49,12 +53,13 @@ export function formatPrice(market: StockMarket, value: number): string {
   );
 }
 
-export const formatChance = (chance: number) => `${chance.toFixed(1)}%`;
+/** Upside: fair price ÷ current price − 1. */
+export const upside = (fair: number, price: number) => fair / price - 1;
 
-/** "到 1,400 的機率 56.7%" or "56.7% to reach 1,400" for the holding period. */
-export function chanceText(t: Messages, stock: Stock, holding: Holding): string {
-  const { price, chance } = fairOf(stock, holding);
-  return t.stocks.chance(formatPrice(stock.market, price), formatChance(chance));
+/** Upside as a signed percent to one decimal: 1,400 on 1,085 → "+29.0%". */
+export function upsideText(fair: number, price: number): string {
+  const percent = upside(fair, price) * 100;
+  return `${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%`;
 }
 
 // ---- Daily candles ----
@@ -83,6 +88,17 @@ export function weekdays(from: string, to: string): number[] {
     if (weekday !== 0 && weekday !== 6) days.push(ms);
   }
   return days;
+}
+
+/** The UTC midnight `count` weekdays after `timestamp` (a candle day): where the chart's candle grid continues. */
+export function weekdaysAfter(timestamp: number, count: number): number {
+  let ms = timestamp;
+  for (let left = count; left > 0; ) {
+    ms += DAY_MS;
+    const weekday = new Date(ms).getUTCDay();
+    if (weekday !== 0 && weekday !== 6) left -= 1;
+  }
+  return ms;
 }
 
 /** Seeded uniform numbers in [0, 1) (mulberry32): the same seed gives the same sequence every time. */
@@ -134,6 +150,126 @@ export function dailyCandles(
       volume: c.volume,
     };
   });
+}
+
+// ---- Earnings reports and range boxes ----
+
+/** Where the price may stand when a holding period ends, as modelled on one report day. */
+export interface PriceRange {
+  /** Bottom and top of the range: everything outside is an outlier. */
+  lower: number;
+  upper: number;
+  /** Half of the outcomes end below it. */
+  median: number;
+  /** The average outcome (EV = 0). */
+  fair: number;
+}
+
+export interface EarningsReport {
+  /** ISO day the results came out: a weekday with a candle. */
+  date: string;
+  /** One range per holding period, in HOLDINGS order. */
+  ranges: PriceRange[];
+}
+
+const roundPrice = (value: number) => (value >= 100 ? Math.round(value) : cents(value));
+
+/**
+ * About three years of earnings reports, 84 to 98 days apart, the last one before `today`. Each report gives every
+ * holding period a range around that day's close: wider for a longer holding period, the median and the fair price
+ * inside it. Seeded per stock, like the candles.
+ */
+export function earningsReports(
+  stock: Stock,
+  candles = dailyCandles(stock),
+  today = STOCKS_DEMO_TODAY,
+): EarningsReport[] {
+  const random = seededRandom(stock.seed * 31 + 7);
+  const closes = new Map(candles.map((c) => [isoDay(c.timestamp), c.close]));
+  const tradingDay = (iso: string) => {
+    let day = iso;
+    while (!closes.has(day)) day = addDays(day, 1);
+    return day;
+  };
+  // A quarter is about 63 trading days.
+  const quarterMove = stock.volatility * Math.sqrt(63);
+  const reports: EarningsReport[] = [];
+  let date = tradingDay(addDays(isoDay(candles[0].timestamp), 20 + Math.floor(random() * 40)));
+  while (date < today) {
+    const base = closes.get(date)!;
+    const width = 0.9 + 0.2 * random();
+    const [down, up] = [0.85 + 0.3 * random(), 0.85 + 0.3 * random()];
+    const drift = -0.008 + 0.033 * random();
+    const [middle, fairShift] = [random(), random()];
+    reports.push({
+      date,
+      ranges: HOLDINGS.map((holding) => {
+        const q = quarters(holding);
+        const spread = quarterMove * Math.sqrt(q) * width;
+        const at = (shift: number) => roundPrice(base * Math.exp(drift * q + spread * shift));
+        return { lower: at(-down), upper: at(up), median: at(0.15 * (middle - 0.5)), fair: at(0.04 + 0.1 * fairShift) };
+      }),
+    });
+    const next = addDays(date, 84 + Math.floor(random() * 15));
+    if (next >= today) break;
+    date = tradingDay(next);
+  }
+  return reports;
+}
+
+const SERIES = new WeakMap<Stock, { candles: Candle[]; reports: EarningsReport[] }>();
+
+/** A Demo stock's candles and reports, drawn once per stock. */
+export function stockSeries(stock: Stock): { candles: Candle[]; reports: EarningsReport[] } {
+  let series = SERIES.get(stock);
+  if (!series) {
+    const candles = dailyCandles(stock);
+    series = { candles, reports: earningsReports(stock, candles) };
+    SERIES.set(stock, series);
+  }
+  return series;
+}
+
+/** The list and the figures above the chart: the latest report's range for the holding period. */
+export function latestRange(stock: Stock, holding: Holding): PriceRange {
+  const reports = stockSeries(stock).reports;
+  return reports[reports.length - 1].ranges[HOLDINGS.indexOf(holding)];
+}
+
+export interface RangeBox {
+  /** The report day, and the day the box ends. */
+  from: string;
+  to: string;
+  /** Candle indexes on the chart; the latest box's `end` lies past the last candle, in the space after today. */
+  start: number;
+  end: number;
+  latest: boolean;
+  range: PriceRange;
+}
+
+/**
+ * One box per report for the holding period. A past report's box ends on the next report day, so boxes never
+ * overlap, whatever the holding period; the latest report's box runs N × 90 days (Q+1 90 days, Q+12 1,080 days).
+ */
+export function rangeBoxes(reports: EarningsReport[], candles: Candle[], holding: Holding): RangeBox[] {
+  const first = isoDay(candles[0].timestamp);
+  // Candles are every weekday, so a day's index is the number of weekdays since the first candle.
+  const index = (iso: string) => weekdays(first, iso).length;
+  const i = HOLDINGS.indexOf(holding);
+  return reports.map((report, n) => {
+    const latest = n === reports.length - 1;
+    const to = latest ? addDays(report.date, 90 * quarters(holding)) : reports[n + 1].date;
+    return { from: report.date, to, start: index(report.date), end: index(to), latest, range: report.ranges[i] };
+  });
+}
+
+/** Opening view, in candles: about the last year, and after the last candle the latest box's first ~3 months. */
+export function openingView(candles: Candle[], reports: EarningsReport[]): { past: number; future: number } {
+  const last = isoDay(candles[candles.length - 1].timestamp);
+  return {
+    past: weekdays(addDays(last, -365), last).length,
+    future: weekdays(last, addDays(reports[reports.length - 1].date, 91)).length,
+  };
 }
 
 // ---- Congress filings ----

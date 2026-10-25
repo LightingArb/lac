@@ -126,7 +126,7 @@ button.rowActive:hover {
 }
 
 .stockRow {
-  grid-template-columns: 56px minmax(80px, 1fr) 72px 72px minmax(120px, 1.4fr);
+  grid-template-columns: 56px minmax(80px, 1fr) 80px 80px 64px;
 }
 
 .memberRow {
@@ -160,11 +160,6 @@ button.rowActive:hover {
 .fair {
   color: var(--color-primary);
   font-weight: 600;
-}
-
-.chance {
-  color: var(--color-text-secondary);
-  font-size: 12px;
 }
 
 .sub {
@@ -249,22 +244,11 @@ button.rowActive:hover {
   color: var(--color-primary);
 }
 
-/* The selector itself narrow (phone, or a narrow column): each row wraps under its first cells. */
+/* The selector itself narrow (phone, or a narrow column): tighter stock columns; a trade's amount goes below it. */
 @container (max-width: 520px) {
   .stockRow {
-    grid-template-columns: 52px minmax(0, 1fr) auto;
-  }
-
-  .stockRow > :nth-child(4) {
-    display: none;
-  }
-
-  .stockRow > :nth-child(5) {
-    grid-column: 2 / 4;
-  }
-
-  .head.stockRow > :nth-child(5) {
-    display: none;
+    grid-template-columns: 40px minmax(0, 1fr) repeat(3, auto);
+    gap: 8px;
   }
 
   .tradeRow {

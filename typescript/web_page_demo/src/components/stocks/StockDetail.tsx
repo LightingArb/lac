@@ -1,16 +1,16 @@
 import { useMemo, type Ref } from 'react';
-import { CONGRESS_MEMBERS } from '../../data/congress';
 import type { Theme } from '../../data/preferences';
 import { CURRENCY, type Holding, type Stock } from '../../data/stocks';
 import { useT } from '../../i18n';
 import { cx } from '../../lib/cx';
 import {
   INDICATORS,
-  chanceText,
-  dailyCandles,
-  fairOf,
   formatPrice,
+  latestRange,
+  openingView,
+  rangeBoxes,
   stockName,
+  stockSeries,
   tradeMarks,
   type StockIndicator,
 } from '../../lib/stocks';
@@ -30,41 +30,41 @@ interface StockDetailProps {
   theme: Theme;
 }
 
-/** Right column: the stock's price, fair price and chance for the holding period, then its daily chart. */
+/** Right column: price, fair price and range of the latest report for the holding period, then the daily chart. */
 export function StockDetail({ ref, stock, pick, holding, indicators, onIndicators, theme }: StockDetailProps) {
   const t = useT();
   const st = t.stocks;
-  const candles = useMemo(() => dailyCandles(stock), [stock]);
-  const fair = fairOf(stock, holding);
-  const fairText = formatPrice(stock.market, fair.price);
-  const member = pick.trade && CONGRESS_MEMBERS.find((m) => m.id === pick.trade!.memberId);
-  const marks = useMemo(() => (member ? tradeMarks(member.id, stock.code) : []), [member, stock.code]);
+  const { candles, reports } = stockSeries(stock);
+  const boxes = useMemo(() => rangeBoxes(reports, candles, holding), [reports, candles, holding]);
+  const view = useMemo(() => openingView(candles, reports), [candles, reports]);
+  const latest = latestRange(stock, holding);
+  const price = (value: number) => formatPrice(stock.market, value);
+  const memberId = pick.trade?.memberId ?? null;
+  const marks = useMemo(() => (memberId ? tradeMarks(memberId, stock.code) : []), [memberId, stock.code]);
   const toggle = (name: StockIndicator) =>
     onIndicators(indicators.includes(name) ? indicators.filter((n) => n !== name) : [...indicators, name]);
 
   return (
     <section ref={ref} aria-label={st.detail} className={styles.detail}>
-      <div className={styles.header}>
-        <div className={styles.titleRow}>
-          <span className={styles.code}>{stock.code}</span>
-          <h1 className={styles.name}>{stockName(t, stock)}</h1>
-          <Badge>{st.currency[CURRENCY[stock.market]]}</Badge>
-        </div>
-        <dl className={styles.figures}>
-          <div>
-            <dt>{st.price}</dt>
-            <dd className={styles.price}>{formatPrice(stock.market, stock.price)}</dd>
-          </div>
-          <div>
-            <dt>{st.columns.fair(holding)}</dt>
-            <dd className={styles.fair}>{fairText}</dd>
-          </div>
-          <div>
-            <dt>{st.columns.chance}</dt>
-            <dd className={styles.chance}>{chanceText(t, stock, holding)}</dd>
-          </div>
-        </dl>
+      <div className={styles.titleRow}>
+        <span className={styles.code}>{stock.code}</span>
+        <h1 className={styles.name}>{stockName(t, stock)}</h1>
+        <Badge>{st.currency[CURRENCY[stock.market]]}</Badge>
       </div>
+      <dl className={styles.figures}>
+        <div>
+          <dt>{st.price}</dt>
+          <dd>{price(stock.price)}</dd>
+        </div>
+        <div>
+          <dt>{st.columns.fair}</dt>
+          <dd className={styles.fair}>{price(latest.fair)}</dd>
+        </div>
+        <div>
+          <dt>{st.range}</dt>
+          <dd>{st.rangeText(price(latest.lower), price(latest.upper))}</dd>
+        </div>
+      </dl>
 
       <div role="group" aria-label={st.indicators} className={styles.indicators}>
         {INDICATORS.map((name) => (
@@ -78,22 +78,15 @@ export function StockDetail({ ref, stock, pick, holding, indicators, onIndicator
             {name}
           </button>
         ))}
-        <span className={styles.daily}>{st.daily}</span>
       </div>
-
-      {member && (
-        <p className={styles.marks}>
-          {st.congress.marking(member.name, marks.length)}{' '}
-          <span className={styles.buy}>{st.congress.markLetter.buy}</span> {st.congress.side.buy} ·{' '}
-          <span className={styles.sell}>{st.congress.markLetter.sell}</span> {st.congress.side.sell}
-        </p>
-      )}
 
       <StockChart
         code={stock.code}
         market={stock.market}
         candles={candles}
-        fair={{ price: fair.price, label: st.fairLine(holding, fairText) }}
+        holding={holding}
+        boxes={boxes}
+        view={view}
         indicators={indicators}
         marks={marks}
         focus={pick.trade?.timestamp ?? null}

@@ -31,6 +31,30 @@
   pointer-events: none;
 }
 
+/* A box under the crosshair: report day, holding period and its four prices. */
+.boxInfo {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.boxInfo dt {
+  color: var(--color-text-muted);
+}
+
+.boxInfo dd {
+  margin: 0;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.boxInfo .fair {
+  color: var(--color-primary);
+  font-weight: 700;
+}
+
 .buy {
   color: #16a34a;
 }

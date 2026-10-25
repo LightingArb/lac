@@ -20,12 +20,6 @@
   }
 }
 
-.header {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
 .titleRow {
   display: flex;
   flex-wrap: wrap;
@@ -47,21 +41,18 @@
   line-height: 1.25;
 }
 
+/* Price, fair price and range: three numbers in a row, no boxes around them. */
 .figures {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
   margin: 0;
 }
 
 .figures > div {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-muted);
+  gap: 2px;
 }
 
 .figures dt {
@@ -73,22 +64,13 @@
 .figures dd {
   margin: 0;
   color: var(--color-text);
-  font-variant-numeric: tabular-nums;
-}
-
-.price,
-.fair {
   font-size: 20px;
+  font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
 
 .fair {
   color: var(--color-primary);
-}
-
-.chance {
-  font-size: 14px;
-  font-weight: 600;
 }
 
 .indicators {
@@ -113,36 +95,4 @@
   border-color: var(--color-primary);
   background: var(--color-primary-soft);
   color: var(--color-primary);
-}
-
-.daily {
-  margin-left: auto;
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-
-.marks {
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.buy,
-.sell {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 9px;
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.buy {
-  background: #16a34a;
-}
-
-.sell {
-  background: #dc2626;
 }

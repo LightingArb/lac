@@ -84,26 +84,35 @@ import { DEMO_SPORTS_SIGNALS, SPORTS_DEMO_NOW, type SportsSignal } from '../src/
 import { SignalPanel } from '../src/components/signals/SignalPanel';
 import { SportsDetail } from '../src/components/sports/SportsDetail';
 import { cellMarks, gameOf, signalCard, signalState, sportsSignals } from '../src/lib/sportsSignals';
-import { DEFAULT_HOLDING, DEMO_STOCKS, HOLDINGS, STOCKS_DEMO_TODAY } from '../src/data/stocks';
+import { DEFAULT_HOLDING, DEMO_STOCKS, HOLDINGS, STOCKS_DEMO_TODAY, quarters } from '../src/data/stocks';
+import { addDays } from '../src/data/products';
 import { CONGRESS_MEMBERS, CONGRESS_TRADES } from '../src/data/congress';
 import { DEMO_FUNDS } from '../src/data/funds';
 import { StockSelector } from '../src/components/stocks/StockSelector';
 import {
   amountText,
-  chanceText,
   congressMembers,
   dailyCandles,
   dayStart,
-  fairOf,
+  earningsReports,
   formatPrice,
   fundHoldings,
   fundsHolding,
+  isoDay,
+  latestRange,
   memberTrades,
+  openingView,
+  rangeBoxes,
   searchFunds,
   searchStocks,
   stockByCode,
+  stockSeries,
   tabsFor,
   tradeMarks,
+  upside,
+  upsideText,
+  weekdays,
+  weekdaysAfter,
 } from '../src/lib/stocks';
 import { liveVersion } from '../src/data/products';
 import { en } from '../src/i18n/en';
@@ -791,28 +800,83 @@ test('Demo sports signals sit on Demo cells: entry is the buy price, ev and roi 
 const selector = (language: 'en' | 'zh-Hant', props: Partial<Parameters<typeof StockSelector>[0]> = {}) =>
   renderIn(language, createElement(StockSelector, {
     market: 'tw', onMarket: () => {}, tab: 'analysis', onTab: () => {}, holding: DEFAULT_HOLDING, selectedCode: '2330', onPick: () => {}, ...props }));
-test('Stocks: the holding period picks its own fair price and chance; the chance reads "到 1,400 的機率 56.7%"', () => {
-  const tsmc = stockByCode('2330')!;
-  assert.equal(DEFAULT_HOLDING, 'Q+4');
-  assert.deepEqual(HOLDINGS.map((h) => fairOf(tsmc, h)), [
-    { price: 1120, chance: 61.2 }, { price: 1180, chance: 59.8 }, { price: 1400, chance: 56.7 }, { price: 1520, chance: 54.1 }, { price: 1650, chance: 52.3 },
-  ]);
-  assert.equal(chanceText(zh, tsmc, 'Q+4'), '到 1,400 的機率 56.7%');
-  assert.equal(chanceText(en, tsmc, 'Q+4'), '56.7% to reach 1,400');
-  assert.equal(chanceText(en, stockByCode('AAPL')!, 'Q+1'), '59.4% to reach 268.00');
-  assert.equal(chanceText(zh, stockByCode('1301')!, 'Q+12'), '到 48 的機率 49.5%');
-  assert.deepEqual([formatPrice('tw', 1085), formatPrice('tw', 38.75), formatPrice('us', 262.35), formatPrice('us', 290)], ['1,085', '38.75', '262.35', '290.00']);
+test('Stocks: a report about every 90 days for three years; per holding period lower < 50% < upper, fair inside, wider when longer', () => {
   for (const stock of DEMO_STOCKS) {
-    assert.ok(stock.fair.length === 5 && stock.chance.length === 5, stock.code);
-    assert.ok(stock.chance.every((c) => c > 0 && c < 100 && Math.round(c * 10) === c * 10), `${stock.code} chances to one decimal`);
+    const { candles, reports } = stockSeries(stock);
+    const days = new Set(candles.map((c) => isoDay(c.timestamp)));
+    assert.deepEqual(earningsReports(stock, dailyCandles(stock)), reports, `${stock.code} same seed, same reports`);
+    assert.ok(reports.length >= 11 && reports.length <= 13, `${stock.code}: ${reports.length} reports`);
+    assert.ok(reports.at(-1)!.date < STOCKS_DEMO_TODAY, 'the last report is before today');
+    reports.forEach((report, i) => {
+      assert.ok(days.has(report.date), `${stock.code} ${report.date} is a candle day`);
+      if (i > 0) {
+        const gap = (dayStart(report.date) - dayStart(reports[i - 1].date)) / 86400000;
+        assert.ok(gap >= 84 && gap <= 100, `${stock.code} ${report.date}: ${gap} days after the previous report`);
+      }
+      assert.equal(report.ranges.length, HOLDINGS.length);
+      report.ranges.forEach((r, h) => {
+        assert.ok(r.lower < r.median && r.median < r.upper, `${stock.code} ${report.date} ${HOLDINGS[h]} order`);
+        assert.ok(r.lower < r.fair && r.fair < r.upper, `${stock.code} ${report.date} ${HOLDINGS[h]} fair inside`);
+        if (h > 0) assert.ok(r.upper - r.lower > report.ranges[h - 1].upper - report.ranges[h - 1].lower, `${stock.code} ${report.date} ${HOLDINGS[h]} wider`);
+      });
+    });
   }
-  // The list follows the holding period; "win rate" is never used.
-  const q1 = selector('zh-Hant', { holding: 'Q+1' });
-  const q12 = selector('zh-Hant', { holding: 'Q+12' });
-  assert.ok(q1.includes('合理價格 Q+1') && q1.includes('到 1,120 的機率 61.2%') && !q1.includes('到 1,650'));
-  assert.ok(q12.includes('合理價格 Q+12') && q12.includes('到 1,650 的機率 52.3%'));
-  assert.ok(selector('en', { market: 'us' }).includes('56.1% to reach 290.00'));
-  for (const html of [q1, q12, selector('en')]) assert.ok(!html.includes('勝率') && !/win rate/i.test(html));
+});
+test('Stocks: past boxes run from a report to the next one without overlapping, also at Q+12; the latest runs N × 90 days', () => {
+  const tsmc = stockByCode('2330')!;
+  const { candles, reports } = stockSeries(tsmc);
+  for (const holding of ['Q+1', 'Q+4', 'Q+12'] as const) {
+    const boxes = rangeBoxes(reports, candles, holding);
+    assert.equal(boxes.length, reports.length);
+    boxes.slice(0, -1).forEach((box, i) => {
+      assert.deepEqual([box.from, box.to, box.latest], [reports[i].date, reports[i + 1].date, false]);
+      assert.equal(box.end, boxes[i + 1].start, `${holding}: box ${i} ends where the next starts`);
+      assert.ok(box.start < box.end);
+      assert.equal(candles[box.start].timestamp, dayStart(box.from));
+      assert.equal(candles[box.end].timestamp, dayStart(box.to));
+      assert.deepEqual(box.range, reports[i].ranges[HOLDINGS.indexOf(holding)]);
+    });
+    const latest = boxes.at(-1)!;
+    assert.ok(latest.latest);
+    assert.equal(latest.to, addDays(latest.from, 90 * quarters(holding)), `${holding}: N × 90 days`);
+    assert.equal(latest.end - latest.start, weekdays(latest.from, latest.to).length, 'counted in weekday candles');
+    // The chart's date under the box's end (past the last candle, weekdays continue): the box's last day.
+    const endDay = isoDay(weekdaysAfter(candles.at(-1)!.timestamp, latest.end - (candles.length - 1)));
+    assert.ok(endDay <= latest.to && endDay >= addDays(latest.to, -2), `${holding}: ends ${endDay} for ${latest.to}`);
+  }
+  assert.equal(isoDay(weekdaysAfter(dayStart('2026-10-23'), 1)), '2026-10-26', 'Friday + 1 weekday is Monday');
+  assert.equal(isoDay(weekdaysAfter(dayStart('2026-10-23'), 5)), '2026-10-30');
+  assert.equal(rangeBoxes(reports, candles, 'Q+1').at(-1)!.to, addDays(reports.at(-1)!.date, 90));
+  assert.equal(rangeBoxes(reports, candles, 'Q+12').at(-1)!.to, addDays(reports.at(-1)!.date, 1080));
+  assert.ok(rangeBoxes(reports, candles, 'Q+12').at(-1)!.end > candles.length - 1, 'reaches past today');
+  // Opening view: about a year of candles, then the latest box's first ~3 months after the last candle.
+  const view = openingView(candles, reports);
+  assert.ok(view.past >= 260 && view.past <= 262, `${view.past} candles in the last year`);
+  assert.equal(view.future, weekdays(STOCKS_DEMO_TODAY, addDays(reports.at(-1)!.date, 91)).length);
+});
+test('Stocks: the list and the figures show the latest report; upside = fair ÷ price − 1; no chance, no win rate', () => {
+  for (const stock of DEMO_STOCKS) {
+    const { reports } = stockSeries(stock);
+    HOLDINGS.forEach((holding, h) => assert.deepEqual(latestRange(stock, holding), reports.at(-1)!.ranges[h]));
+  }
+  assert.deepEqual([upsideText(1400, 1085), upsideText(1050, 1085), upsideText(1085, 1085), upsideText(75.29, 88.6)], ['+29.0%', '-3.2%', '+0.0%', '-15.0%']);
+  assert.equal(upside(1400, 1085), 1400 / 1085 - 1);
+  assert.deepEqual([formatPrice('tw', 1085), formatPrice('tw', 38.75), formatPrice('us', 262.35), formatPrice('us', 290)], ['1,085', '38.75', '262.35', '290.00']);
+  const tsmc = stockByCode('2330')!;
+  for (const holding of ['Q+1', 'Q+12'] as const) {
+    const fair = latestRange(tsmc, holding).fair;
+    const html = selector('zh-Hant', { holding });
+    assert.ok(html.includes(formatPrice('tw', fair)) && html.includes(upsideText(fair, tsmc.price)), `${holding} row`);
+    assert.ok(html.includes('合理價格') && html.includes('空間') && !html.includes('Q+'));
+  }
+  assert.ok(selector('en', { market: 'us' }).includes('Upside'));
+  // Nothing on the page says chance or win rate: every Stocks string, and the rendered lists of every tab.
+  const strings = (value: unknown): string =>
+    typeof value === 'object' && value !== null ? Object.values(value).map(strings).join(' ') : String(value);
+  const pages = [zh, en].flatMap((t) => [strings(t.stocks)]).concat(
+    (['tw', 'us'] as const).flatMap((market) => tabsFor(market).flatMap((tab) => [selector('zh-Hant', { market, tab }), selector('en', { market, tab })])),
+  );
+  for (const text of pages) assert.ok(!/機率|勝率|chance|win rate/i.test(text));
   assert.deepEqual(searchStocks('tw', '台積').map((s) => s.code), ['2330']);
   assert.deepEqual(searchStocks('us', 'nv').map((s) => s.code), ['NVDA']);
   assert.deepEqual(searchStocks('tw', 'tsmc').map((s) => s.code), ['2330']);

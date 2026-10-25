@@ -6,20 +6,20 @@ import { useT } from '../../i18n';
 import { cx } from '../../lib/cx';
 import {
   amountText,
-  chanceText,
   congressMembers,
   dayStart,
-  fairOf,
   fundHoldings,
   fundName,
   fundsHolding,
   formatPrice,
+  latestRange,
   memberTrades,
   searchFunds,
   searchStocks,
   stockByCode,
   stockName,
   tabsFor,
+  upsideText,
   type StockTab,
 } from '../../lib/stocks';
 import { SegmentedControl } from '../ui/SegmentedControl';
@@ -111,25 +111,28 @@ function Analysis({
           <span>{st.columns.code}</span>
           <span>{st.columns.name}</span>
           <span className={styles.num}>{st.columns.price}</span>
-          <span className={styles.num}>{st.columns.fair(holding)}</span>
-          <span>{st.columns.chance}</span>
+          <span className={styles.num}>{st.columns.fair}</span>
+          <span className={styles.num}>{st.columns.upside}</span>
         </div>
         {stocks.length === 0 && <p className={styles.empty}>{st.noMatch}</p>}
-        {stocks.map((stock) => (
-          <button
-            key={stock.code}
-            type="button"
-            aria-pressed={stock.code === selectedCode}
-            className={cx(styles.stockRow, styles.row, stock.code === selectedCode && styles.rowActive)}
-            onClick={() => onPick({ code: stock.code, trade: null })}
-          >
-            <span className={styles.code}>{stock.code}</span>
-            <span className={styles.name}>{stockName(t, stock)}</span>
-            <span className={styles.num}>{formatPrice(market, stock.price)}</span>
-            <span className={cx(styles.num, styles.fair)}>{formatPrice(market, fairOf(stock, holding).price)}</span>
-            <span className={styles.chance}>{chanceText(t, stock, holding)}</span>
-          </button>
-        ))}
+        {stocks.map((stock) => {
+          const fair = latestRange(stock, holding).fair;
+          return (
+            <button
+              key={stock.code}
+              type="button"
+              aria-pressed={stock.code === selectedCode}
+              className={cx(styles.stockRow, styles.row, stock.code === selectedCode && styles.rowActive)}
+              onClick={() => onPick({ code: stock.code, trade: null })}
+            >
+              <span className={styles.code}>{stock.code}</span>
+              <span className={styles.name}>{stockName(t, stock)}</span>
+              <span className={styles.num}>{formatPrice(market, stock.price)}</span>
+              <span className={cx(styles.num, styles.fair)}>{formatPrice(market, fair)}</span>
+              <span className={styles.num}>{upsideText(fair, stock.price)}</span>
+            </button>
+          );
+        })}
       </div>
     </>
   );
