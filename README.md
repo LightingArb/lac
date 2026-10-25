@@ -426,7 +426,7 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 | 左左（可摺疊）     | 上方入口，一行一項：Prediction、Signal、Sports、Buy USDT、Stocks、Products、Referral rewards。中間是目前入口的分類，每項顯示議題數（Sports 是運動 → 聯賽與場數）。最下方是 Settings、登入、語言切換（EN／繁中） |
 | 左中               | 議題卡片列表。上方是麵包屑、篩選、搜尋。每張卡片：圖示與標題、結束時間、前三個選項的價格（¢）與倍數（×）；比賽類顯示比分與雙方機率                                                                |
 | 右中               | 議題詳情：標題、標籤、開始與結束時間、24 小時與總成交量；走勢圖（1H／6H／1D／1W／1M／All，每個選項一條線）；Markets 選項表，每列顯示 Chance 與 Yes／No 買入按鈕，可隱藏低流動性市場               |
-| 右右（可摺疊）     | 只在 Signal 出現。分類分頁（只顯示客戶有權益的）、排序（Latest／EV／ROI／Depth／Expiry）。每張卡片：分類 · 標的、選項、YES／NO、EV、Entry、Fair（差距 %）、Avg. Cost（depth）、更新時間、剩餘時間 |
+| 右右（可摺疊）     | 在 Signal 與 Sports 出現（Sports 只列體育訊號）。分類分頁（只顯示客戶有權益的）、排序（Latest／EV／ROI／Depth／Expiry）。每張卡片：分類 · 標的、選項、YES／NO、EV、Entry、Fair（差距 %）、Avg. Cost（depth）、更新時間、剩餘時間 |
 | 交易終端（可摺疊） | 只在 Signal 出現，在右右的右邊。客戶的錢包、帳戶摘要，以及持倉／訂單／交易三個分頁，見下面「交易終端」                                                                                            |
 
 **交易終端（Signal 最右邊一欄）：** 參考 MT5 手機 app 的「交易」與「歷史」頁。範例只有 Demo 假資料（[src/data/terminal.ts](typescript/web_page_demo/src/data/terminal.ts)），Live 的 Signal 沒有這一欄；正式版接上客人真的錢包，LAC 只請錢包簽名，不拿私鑰。
@@ -444,8 +444,8 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 **入口：**
 
 - **Prediction：** Polymarket 全部議題，沒有訊號欄。
-- **Signal：** LAC 有在算的議題。分類最上面是 Trending（現在有訊號的議題），下面是 Weather、Crypto、Forex、Future、Sport；客戶沒有權益、或那一類現在沒有訊號，就不顯示。中間兩欄跟 Prediction 完全一樣，多了右右的訊號欄；最右邊有交易終端。
-- **Sports：** Polymarket 的體育賽事與賠率，照運動 → 聯賽分類，見下面「Sports 頁」。不放訊號、不算 EV，沒有訊號欄與交易終端。
+- **Signal：** LAC 有在算的議題。分類最上面是 Trending（現在有訊號的議題），下面是 Weather、Crypto、Forex、Future、Sport；客戶沒有權益、或那一類現在沒有訊號，就不顯示。權益照客戶持有的產品版本裡的項目（§7.1）：有某個產品的項目就看得到那個產品；體育照訂的運動（Sport 的項目），只訂足球就只看到足球的訊號與議題，跟 Sports 頁用同一個判斷。中間兩欄跟 Prediction 完全一樣，多了右右的訊號欄；最右邊有交易終端。
+- **Sports：** Polymarket 的體育賽事與賠率，照運動 → 聯賽分類，見下面「Sports 頁」。不算 EV；訂閱客人照訂的運動多看到 LAC 訊號（格子標報酬率、右右有訊號欄）。沒有交易終端。
 - **Buy USDT：** 一行，黑色粗體。點開是合作網站清單（名稱、付款方式、手續費、最低金額、支援的鏈、外連按鈕），規則見 §7.6。
 - **Stocks：** 先留位置，不啟動。
 - **Products：** 方案卡片與月／季／年切換，每張訊號方案顯示「包含：…」（來自目前上架的版本，§7.1）；底部有兌換碼。
@@ -456,7 +456,7 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 
 - 左左選分類 → 左中列出議題 → 點議題 → 右中顯示詳情。
 - 在 Signal 點右右的一張訊號 → 左中跳到那個議題，右中捲到那個選項，**對應的 Yes 或 No 按鈕變黃底黃框**，那一列淡黃底。訊號靠 Polymarket 編號對到市場（§6）。點交易終端的一個持倉也一樣；那個議題沒有 LAC 訊號時改在 Prediction 打開並標黃。
-- Sports：左左選運動或聯賽 → 左中列出賽事 → 點一場 → 右中顯示這場全部的市場。
+- Sports：左左選運動或聯賽 → 左中列出賽事 → 點一場 → 右中顯示這場全部的市場。點右右的一張訊號 → 左中跳到那場比賽，右中捲到那條線，對應的格子黃底黃框，那條線淡黃底，跟 Signal 一樣。
 
 **Sports 頁：**
 
@@ -495,7 +495,15 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
   - 歐洲盤 = 1 ÷ 買進價，到小數點後 2 位。
   - 美國盤：買進價大於 0.5 是 −(價格 ÷ (1 − 價格)) × 100；小於 0.5 是 +((1 − 價格) ÷ 價格) × 100；等於 0.5 是 +100；四捨五入到整數。
   - 例：62¢ → 1.61／−163；38¢ → 2.63／+163；50¢ → 2.00／+100。
-- **Demo：** [src/data/sports.ts](typescript/web_page_demo/src/data/sports.ts) 的假資料（7 個聯賽、18 個議題合成 14 場，含進行中、還沒開始、已結束，有的場沒有讓分或大小分；Arsenal FC vs. Chelsea FC 由主議題、More Markets 與沒有 `game_id` 的 Total Corners 合成，另有兩場有子議題、兩場橄欖球的勝負三格，其中一場對不出三格）。**Live：** 唯讀本機 `lac_data`，讀法見 §4。
+- **訂閱客人的訊號：** 沒訂的人看到的是賠率頁；訂了的人照訂的運動多看到 LAC 的體育訊號（§6 `/signals` 的 `product = sport`）。目前只有 Demo。
+  - **權益照運動：** 客人持有的產品版本（§7.1）裡 Sport 的項目（足球、籃球…）就是看得到的運動，比對訊號 `classification_path` 的 sport。Signal 頁的體育訊號用同一個判斷。
+  - **顯示條件：** 訂了那個運動，而且 `status = active`、`ev > 0`、現在早於 `valid_until`；缺一個就不顯示，也不算進「N 個 LAC 訊號」。
+  - **格子的報酬率：** 訊號那一格（訊號的市場與結果；`side` YES 是第一個結果、NO 是第二個）的賠率前面加綠色的「(+4.2%)」，數字是訊號的 `roi`，到小數一位；歐洲盤與美國盤都有，列表與詳情都標。例：62¢、fair 64.6% → (+4.2%) 1.61／(+4.2%) −163。
+  - **右右訊號欄：** 用 Signal 的訊號欄，只列體育訊號；可以摺疊，低於 1200px 變抽屜。訂了的運動照 Signal 的卡片顯示：體育 · 足球、比賽與盤口、買的結果、EV、Entry、Fair（報酬率）、Avg. Cost（depth）、更新與剩餘時間。
+  - **沒訂的運動：** 格子不標任何東西（不放鎖頭，不透露哪一格有訊號）；訊號欄最上面每個運動一行「足球今天有 N 個 LAC 訊號，訂閱解鎖」，只給數量，不透露哪一場、哪一邊；點了到 Products。
+  - **點一張卡片：** 左中跳到那場比賽（目前選的運動或聯賽列得出它就留著，不然換成全部運動；搜尋清掉），右中打開詳情並捲到那條線；對應的格子在列表與詳情都黃底黃框，那條線淡黃底，跟 Signal 一樣。點別場或換分類就取消。
+  - **Live：** 還沒有 Live 訊號：右右顯示「Live 模式沒有 LAC 訊號」，格子不標。
+- **Demo：** [src/data/sports.ts](typescript/web_page_demo/src/data/sports.ts) 的假資料（7 個聯賽、18 個議題合成 14 場，含進行中、還沒開始、已結束，有的場沒有讓分或大小分；Arsenal FC vs. Chelsea FC 由主議題、More Markets 與沒有 `game_id` 的 Total Corners 合成，另有兩場有子議題、兩場橄欖球的勝負三格，其中一場對不出三格）。訊號的假資料在 [src/data/sportsSignals.ts](typescript/web_page_demo/src/data/sportsSignals.ts)：足球 6、籃球 3、冰球 1 個，其中 EV 等於 0、已過期、不是 active 的各一個（不顯示）；有效期限照固定的 Demo 時間 2026-10-21 21:00 UTC 判斷。Demo 的客人持有「全部訊號 v1」，Sport 只有足球；在後台的會員頁撤銷它，就是什麼都沒訂（也沒訂體育），發 Sport 給他就多了 v2（足球、籃球）。**Live：** 唯讀本機 `lac_data`，讀法見 §4。
 
 **語言：** 繁體中文與英文都要，左下角或 Settings 切換。Polymarket 的內容（議題標題、選項名稱、標籤）維持原文不翻；我們自己的東西（分類、產品、項目名稱）兩種語言都要有。範例的文案集中在 [typescript/web_page_demo/src/i18n/](typescript/web_page_demo/src/i18n/)。
 
@@ -827,6 +835,7 @@ Chance 顯示最佳買賣價平均值的百分比，由 `m_api` 計算 `midpoint
 | entry                     | numeric 字串或 null | 現在的買入價                                                                                                                                              |
 | fair                      | numeric 字串或 null | LAC 算出的合理價                                                                                                                                          |
 | ev                        | numeric 字串或 null | fair － entry；由上游提供，Web 不重算                                                                                                                     |
+| roi                       | numeric 字串或 null | 照進場價下注 1 元的期望報酬，＝ fair ÷ entry − 1。例如 entry 0.62、fair 0.646 是 0.042，網站顯示 +4.2%；由上游提供，Web 不重算                            |
 | avg_cost                  | numeric 字串或 null | 從現在的掛單一路買到 fair 為止的平均成本                                                                                                                  |
 | depth                     | numeric 字串或 null | 在 fair 以下可以買到的份數                                                                                                                                |
 | evaluated_at、valid_until | UTC 時間或 null     | 算出這筆的時間、有效到幾點；缺少時保留 null，不推算                                                                                                       |

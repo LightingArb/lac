@@ -251,13 +251,19 @@ const isYesNo = (market: SportsMarket) =>
   market.outcomes.some((o) => o.label === 'Yes') &&
   market.outcomes.some((o) => o.label === 'No');
 
+/** One outcome of one market: what an odds cell shows. */
+export interface SportsCell {
+  market: SportsMarket;
+  outcome: SportsOutcome;
+}
+
 /**
  * A game with exactly three moneyline markets, all Yes/No (soccer, rugby…), shows one row of three
  * cells: team 1 / draw / team 2, each the market's Yes. The market whose title names only team 1
  * (name or alias, not team 2) is cell 1, only team 2 is cell 3, the remaining one is the draw.
  * Not exactly that: three nulls ("—"). Any other moneyline shape: null.
  */
-export function threeWay(game: Pick<SportsGame, 'teams' | 'markets'>): (SportsOutcome | null)[] | null {
+export function threeWay(game: Pick<SportsGame, 'teams' | 'markets'>): (SportsCell | null)[] | null {
   const markets = moneylines(game.markets);
   if (markets.length !== 3 || !markets.every(isYesNo)) return null;
   const names = (team: SportsTeam | undefined) =>
@@ -268,7 +274,7 @@ export function threeWay(game: Pick<SportsGame, 'teams' | 'markets'>): (SportsOu
   const two = markets.filter((m) => hits(m, second) && !hits(m, first));
   if (one.length !== 1 || two.length !== 1) return [null, null, null];
   const draw = markets.find((m) => m !== one[0] && m !== two[0])!;
-  const yes = (market: SportsMarket) => market.outcomes.find((o) => o.label === 'Yes') ?? null;
+  const yes = (market: SportsMarket) => ({ market, outcome: market.outcomes.find((o) => o.label === 'Yes')! });
   return [yes(one[0]), yes(draw), yes(two[0])];
 }
 
@@ -373,6 +379,12 @@ export function filterLeagues(filter: SportsFilter, leagues: LeagueCount[]): str
   if (filter.league !== undefined) return [filter.league ?? ''];
   if (filter.sport === null) return null;
   return leagues.filter((l) => sportOf(l.code) === filter.sport).map((l) => l.code ?? '');
+}
+
+/** Opening a game from the signals column: the current filter stays when it lists the game, otherwise all sports. */
+export function focusFilter(filter: SportsFilter, game: SportsGame, leagues: LeagueCount[]): SportsFilter {
+  const covered = filterLeagues(filter, leagues);
+  return covered === null || covered.includes(game.league.code ?? '') ? filter : ALL_SPORTS;
 }
 
 /** Sports with their game counts; the picked sport lists its leagues under it, largest first. */
@@ -511,6 +523,10 @@ export interface SportsWorkspace {
   previous: () => void;
   pick: (game: SportsGame) => void;
   pickCategory: (id: string) => void;
+  /** The signal card picked in the signals column; cleared by picking a game or a category. */
+  highlightId: string | null;
+  /** Opens a game from the signals column (search cleared by the caller) and remembers the card. */
+  focus: (game: SportsGame, highlightId: string) => void;
 }
 
 /** Demo filters the built-in games here; Live asks the reader for one page at a time. */
@@ -518,13 +534,15 @@ export function useSportsWorkspace(enabled: boolean, dataMode: DataMode, query: 
   const t = useT();
   const live = enabled && dataMode === 'live';
   const [filter, setFilter] = useState<SportsFilter>(ALL_SPORTS);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const searching = query.trim() !== '';
 
   const leagueData = useLive<{ leagues: LeagueCount[] }>(live ? '/api/live/sports/leagues' : null, 600000);
   const leagues = live ? (leagueData.data?.leagues ?? []) : leagueCounts(DEMO_GAMES);
   const covered = searching ? null : filterLeagues(filter, leagues);
   // Pages and the picked game belong to one mode, filter and search; any change starts from the first page.
-  const scope = `${dataMode}:${query}:${covered?.join(',') ?? '*'}`;
+  const scopeOf = (q: string, codes: string[] | null) => `${dataMode}:${q}:${codes?.join(',') ?? '*'}`;
+  const scope = scopeOf(query, covered);
   const initial: SportsPaging = { scope, cursors: [null], selected: null };
   const [stored, setStored] = useState<SportsPaging>(initial);
   const paging = stored.scope === scope ? stored : initial;
@@ -582,7 +600,20 @@ export function useSportsWorkspace(enabled: boolean, dataMode: DataMode, query: 
       if (list.data?.next) patch({ cursors: [...paging.cursors, list.data.next], selected: null });
     },
     previous: () => patch({ cursors: paging.cursors.slice(0, -1), selected: null }),
-    pick: (game) => patch({ selected: game.id }),
-    pickCategory: (id) => setFilter(filterFromId(id)),
+    pick: (game) => {
+      patch({ selected: game.id });
+      setHighlightId(null);
+    },
+    pickCategory: (id) => {
+      setFilter(filterFromId(id));
+      setHighlightId(null);
+    },
+    highlightId,
+    focus: (game, id) => {
+      const next = focusFilter(filter, game, leagues);
+      setFilter(next);
+      setStored({ scope: scopeOf('', filterLeagues(next, leagues)), cursors: [null], selected: game.id });
+      setHighlightId(id);
+    },
   };
 }

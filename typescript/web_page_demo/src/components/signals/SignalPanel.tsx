@@ -13,7 +13,7 @@ type SortId = 'latest' | 'ev' | 'roi' | 'depth' | 'expiry';
 const SORTS: { id: SortId; key: (s: PricedSignal) => number }[] = [
   { id: 'latest', key: (s) => s.updatedSec },
   { id: 'ev', key: (s) => -s.ev },
-  { id: 'roi', key: (s) => -(s.ev / s.entry) },
+  { id: 'roi', key: (s) => -s.roi },
   { id: 'depth', key: (s) => -s.depth },
   { id: 'expiry', key: (s) => s.minutesLeft },
 ];
@@ -27,9 +27,25 @@ interface SignalPanelProps {
   products: Product[];
   activeId: string | null;
   onSelect: (signal: PricedSignal) => void;
+  /** Sports page: one line per sport the customer doesn't hold, giving only a count; a click opens Products. */
+  locked?: { id: string; text: string }[];
+  onLocked?: () => void;
+  /** Replaces "No signals right now" (Live: LAC has no signals there yet). */
+  emptyText?: string;
 }
 
-export function SignalPanel({ variant = 'aside', open, onToggle, signals, products, activeId, onSelect }: SignalPanelProps) {
+export function SignalPanel({
+  variant = 'aside',
+  open,
+  onToggle,
+  signals,
+  products,
+  activeId,
+  onSelect,
+  locked = [],
+  onLocked,
+  emptyText,
+}: SignalPanelProps) {
   const t = useT();
   const [tab, setTab] = useState<'all' | ProductId>('all');
   const [sort, setSort] = useState<SortId>('latest');
@@ -96,7 +112,14 @@ export function SignalPanel({ variant = 'aside', open, onToggle, signals, produc
       </div>
 
       <div className={styles.list}>
-        {list.length === 0 && <p className={styles.empty}>{t.signals.none}</p>}
+        {list.length === 0 && locked.length === 0 && <p className={styles.empty}>{emptyText ?? t.signals.none}</p>}
+        {locked.map((line) => (
+          <button key={line.id} type="button" className={styles.locked} onClick={onLocked}>
+            <Icon name="lock" size={16} strokeWidth={2} />
+            <span className={styles.lockedText}>{line.text}</span>
+            <Icon name="arrowRight" size={16} strokeWidth={2} />
+          </button>
+        ))}
         {list.map((s) => (
           <SignalCard key={s.id} signal={s} active={s.id === activeId} onSelect={() => onSelect(s)} />
         ))}

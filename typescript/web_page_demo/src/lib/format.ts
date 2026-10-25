@@ -43,9 +43,9 @@ export function sinceUpdate(seconds: number): string {
   return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
 }
 
-/** How far fair value sits above or below price, e.g. "+28.6%". */
-export function edge(fair: number, price: number): string {
-  const d = ((fair - price) / price) * 100;
+/** ROI (fair ÷ entry − 1) as a percent to one decimal, e.g. 0.042 → "+4.2%". */
+export function roiPercent(roi: number): string {
+  const d = roi * 100;
   return `${d >= 0 ? '+' : ''}${d.toFixed(1)}%`;
 }
 

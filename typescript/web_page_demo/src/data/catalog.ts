@@ -72,8 +72,8 @@ export interface MarketEvent {
   kind: 'multi' | 'binary';
   yesLabel?: string;
   noLabel?: string;
-  /** Set when LAC publishes fair values for this event. */
-  lac: { product: ProductId; path: string } | null;
+  /** Set when LAC publishes fair values for this event; Sport events also carry the sport (classification_path). */
+  lac: { product: ProductId; path: string; sport?: string } | null;
   rows: Outcome[];
   match?: MatchInfo;
   liveMatch?: {
@@ -93,6 +93,8 @@ export interface Signal {
   product: ProductId;
   /** Shown after the product name, e.g. "London" in "Weather · London". */
   market: string;
+  /** Sport signals: the sport code (classification_path), which the customer must hold. */
+  sport?: string;
   title: string;
   sideLabel: string;
   side: Side;
@@ -140,15 +142,6 @@ export const CATEGORY_TONES: Record<EventCategoryId, { bg: string; fg: string }>
   esports: { bg: '#FCE7F3', fg: '#9D174D' },
   politics: { bg: '#EDE9FE', fg: '#5B21B6' },
   geopolitics: { bg: '#E2E8F0', fg: '#334155' },
-};
-
-/** Signal products the signed-in customer subscribes to. */
-export const CUSTOMER_PLAN: Record<ProductId, boolean> = {
-  weather: true,
-  crypto: true,
-  forex: true,
-  future: true,
-  sport: true,
 };
 
 export const EVENTS: MarketEvent[] = [
@@ -263,7 +256,7 @@ export const EVENTS: MarketEvent[] = [
     vol24: 1060000,
     volTotal: 3480000,
     kind: 'multi',
-    lac: { product: 'sport', path: 'Soccer · Premier League' },
+    lac: { product: 'sport', path: 'Soccer · Premier League', sport: 'soccer' },
     rows: [
       { id: 'ars', label: 'Arsenal', yes: 0.55, no: 0.46, fair: 0.61, liquidity: 475000, vol: 1900000 },
       { id: 'draw', label: 'Draw', yes: 0.24, no: 0.77, fair: 0.23, liquidity: 200000, vol: 800000 },
@@ -372,7 +365,7 @@ export const EVENTS: MarketEvent[] = [
     kind: 'binary',
     yesLabel: 'Lakers',
     noLabel: 'Celtics',
-    lac: { product: 'sport', path: 'Basketball · NBA' },
+    lac: { product: 'sport', path: 'Basketball · NBA', sport: 'basketball' },
     rows: [{ id: 'ml', label: 'Moneyline', yes: 0.43, no: 0.58, fair: 0.37, liquidity: 302500, vol: 1210000 }],
   },
   {
@@ -520,6 +513,7 @@ export const SIGNALS: Signal[] = [
     id: 's8',
     product: 'sport',
     market: 'Soccer',
+    sport: 'soccer',
     title: 'Arsenal vs. Chelsea · Arsenal',
     sideLabel: 'YES',
     side: 'yes',
@@ -534,6 +528,7 @@ export const SIGNALS: Signal[] = [
     id: 's9',
     product: 'sport',
     market: 'Soccer',
+    sport: 'soccer',
     title: 'Arsenal vs. Chelsea · Chelsea',
     sideLabel: 'NO',
     side: 'no',
@@ -548,6 +543,7 @@ export const SIGNALS: Signal[] = [
     id: 's10',
     product: 'sport',
     market: 'Basketball',
+    sport: 'basketball',
     title: 'Lakers vs. Celtics · Celtics',
     sideLabel: 'CELTICS',
     side: 'no',

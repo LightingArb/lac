@@ -1,7 +1,7 @@
 import { PRODUCT_ICONS } from '../../data/catalog';
 import { cx } from '../../lib/cx';
 import { useT } from '../../i18n';
-import { count, edge, price } from '../../lib/format';
+import { count, price, roiPercent } from '../../lib/format';
 import type { PricedSignal } from '../../lib/markets';
 import { Icon } from '../ui/Icon';
 import styles from './SignalCard.module.css';
@@ -38,7 +38,7 @@ export function SignalCard({ signal: s, active, onSelect }: SignalCardProps) {
         </span>
         <span>
           {t.signals.fair} <strong className={styles.quote}>{price(s.fair)}</strong>{' '}
-          <span className={styles.diff}>({edge(s.fair, s.entry)})</span>
+          <span className={styles.diff}>({roiPercent(s.roi)})</span>
         </span>
       </span>
       <span className={styles.avg}>

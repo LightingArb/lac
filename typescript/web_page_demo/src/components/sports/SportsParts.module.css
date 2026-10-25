@@ -99,6 +99,7 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  text-align: center;
 }
 
 .threeLarge {
@@ -115,6 +116,25 @@
 
 .threeLarge .threeOdds {
   font-size: 17px;
+}
+
+/* A subscriber's signal: ROI before the odds; the cell of the picked card in yellow, as on the Signal page. */
+
+.roi {
+  color: var(--color-success);
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.md .roi {
+  font-size: 12px;
+}
+
+.chip.picked,
+.threeCell.picked {
+  border: 2px solid #eab308;
+  background: #fde047;
+  box-shadow: 0 0 0 2px #fef08a;
 }
 
 /* Teams */

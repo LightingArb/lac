@@ -14,7 +14,7 @@ interface TopBarProps {
   search: { value: string; onChange: (value: string) => void } | null;
   /** Phone layout: opens the navigation drawer. */
   onOpenMenu?: () => void;
-  /** Narrow screens on the Signal page: opens the signals drawer. */
+  /** Narrow screens on the Signal and Sports pages: opens the signals drawer. */
   signals?: { count: number; onOpen: () => void } | null;
   /** Screens too narrow for the terminal column (Signal page, Demo): opens the terminal drawer. */
   onOpenTerminal?: (() => void) | null;

@@ -7,12 +7,13 @@ import { SignalPanel } from './components/signals/SignalPanel';
 import { TradingTerminal } from './components/terminal/TradingTerminal';
 import { Drawer } from './components/ui/Drawer';
 import { SegmentedControl } from './components/ui/SegmentedControl';
-import { CUSTOMER_PLAN, type CategoryId } from './data/catalog';
+import { PRODUCTS, type CategoryId } from './data/catalog';
 import type { Preferences } from './data/preferences';
 import { DEFAULT_REFERRAL_CODE, MY_AGENTS } from './data/referral';
+import { DEMO_SPORTS_SIGNALS, SPORTS_DEMO_NOW } from './data/sportsSignals';
 import { DEMO_ACCOUNT, type Position } from './data/terminal';
-import type { Backend } from './data/backend';
-import type { WithdrawalDraft } from './data/withdrawals';
+import { memberAccess, memberByEmail, type Backend } from './data/backend';
+import { ME, type WithdrawalDraft } from './data/withdrawals';
 import { useT } from './i18n';
 import {
   INITIAL_WORKSPACE,
@@ -21,10 +22,12 @@ import {
   focusPrediction,
   signalCovers,
   type Highlight,
+  type PricedSignal,
   type SignalCategoryId,
   type WorkspaceState,
 } from './lib/markets';
-import { useSportsWorkspace, type OddsFormat } from './lib/sports';
+import { DEMO_GAMES, useSportsWorkspace, type OddsFormat } from './lib/sports';
+import { NO_MARKS, cellMarks, gameOf, signalCard, sportsSignals } from './lib/sportsSignals';
 import { COMPACT_QUERY, MOBILE_QUERY, TERMINAL_QUERY, useMediaQuery } from './lib/useMediaQuery';
 import { MarketsPage } from './pages/MarketsPage';
 import { useLiveWorkspace, type DataMode } from './lib/live';
@@ -38,6 +41,8 @@ import styles from './App.module.css';
 type Mode = 'prediction' | 'signal' | 'sports' | 'stocks' | 'products' | 'referral' | 'settings';
 
 const MODES: Mode[] = ['prediction', 'signal', 'sports', 'stocks', 'products', 'referral', 'settings'];
+
+const SPORTS_NOW = Date.parse(SPORTS_DEMO_NOW);
 
 function modeFromPath(pathname: string): Mode {
   const segment = pathname.split('/')[1] as Mode;
@@ -85,6 +90,13 @@ export default function App({
   const sports = useSportsWorkspace(mode === 'sports', dataMode, sportsQuery);
   // The terminal is Demo-only for now: Live Signal still has no signals and no wallet.
   const showTerminal = mode === 'signal' && dataMode === 'demo';
+  // What the signed-in demo customer holds, from the back office's entitlements (staff can grant or revoke).
+  const access = useMemo(() => memberAccess(backend, memberByEmail(backend, ME)!.code), [backend]);
+  // Sports signals are Demo-only: Live has none yet, so its cells carry no ROI.
+  const sportsView = useMemo(
+    () => (mode === 'sports' && dataMode === 'demo' ? sportsSignals(DEMO_SPORTS_SIGNALS, access, SPORTS_NOW) : null),
+    [mode, dataMode, access],
+  );
 
   const update = (patch: Partial<WorkspaceState>) => setState((prev) => ({ ...prev, ...patch }));
 
@@ -103,9 +115,9 @@ export default function App({
   const demoWorkspace = useMemo(
     () =>
       dataMode === 'demo' && (mode === 'prediction' || mode === 'signal')
-        ? deriveWorkspace(mode, state, CUSTOMER_PLAN, t)
+        ? deriveWorkspace(mode, state, access, t)
         : null,
-    [mode, state, dataMode, t],
+    [mode, state, dataMode, access, t],
   );
 
   const workspace = dataMode === 'live' ? live.workspace : demoWorkspace;
@@ -130,13 +142,29 @@ export default function App({
 
   // A position stays on Signal when Signal lists its event (it has LAC signals); otherwise it opens on Prediction.
   const pickPosition = (position: Position) => {
-    if (signalCovers(position.eventId, CUSTOMER_PLAN)) {
+    if (signalCovers(position.eventId, access)) {
       pickHighlight(position);
       return;
     }
     update(focusPrediction(state, position));
     navigate('/prediction');
   };
+
+  // A sports card opens its game in the middle columns and marks its cell, like a signal on the Signal page.
+  const pickSportsSignal = (card: PricedSignal) => {
+    const signal = DEMO_SPORTS_SIGNALS.find((s) => s.id === card.id)!;
+    setSportsQuery('');
+    sports?.focus(gameOf(signal, DEMO_GAMES)!, signal.id);
+  };
+  const sportsCards = sportsView?.shown.map((s) => signalCard(s, gameOf(s, DEMO_GAMES)!, t, SPORTS_NOW)) ?? [];
+  const sportsMarks =
+    sportsView && sports
+      ? cellMarks(
+          sportsView,
+          DEMO_SPORTS_SIGNALS.find((s) => s.id === sports.highlightId),
+          sports.selected,
+        )
+      : NO_MARKS;
 
   // Keyed by mode so Prediction and Signal don't share scroll position or chart settings.
   const marketsPage = workspace && (
@@ -210,11 +238,32 @@ export default function App({
     onDataMode: setDataMode,
   };
 
-  const signalPanelProps = workspace && {
-    signals: workspace.signals,
-    products: workspace.visibleProducts,
-    activeId: state.highlightId,
-  };
+  // Signal: every signal product the customer holds. Sports: sport signals only, plus a count line per sport not held.
+  const signalPanelProps =
+    mode === 'signal' && workspace
+      ? {
+          signals: workspace.signals,
+          products: workspace.visibleProducts,
+          activeId: state.highlightId,
+          onSelect: pickHighlight,
+        }
+      : sports
+        ? {
+            signals: sportsCards,
+            products: PRODUCTS.filter((p) => p.id === 'sport' && sportsCards.length > 0),
+            activeId: sports.highlightId,
+            onSelect: pickSportsSignal,
+            locked: (sportsView?.locked ?? []).map(({ sport, count }) => ({
+              id: sport,
+              text: t.sports.lockedSignals(t.sports.names[sport], count),
+            })),
+            onLocked: () => {
+              setSignalsDrawerOpen(false);
+              navigate('/products');
+            },
+            emptyText: dataMode === 'live' ? t.app.noLiveSignals : undefined,
+          }
+        : null;
 
   return (
     <div className={styles.shell}>
@@ -234,6 +283,7 @@ export default function App({
             search={{ value: sportsQuery, onChange: setSportsQuery }}
             searchLabel={t.topBar.searchGames}
             onOpenMenu={isMobile ? () => setMenuDrawerOpen(true) : undefined}
+            signals={signalsInDrawer ? { count: sportsCards.length, onOpen: () => setSignalsDrawerOpen(true) } : null}
             actions={
               <SegmentedControl
                 label={t.sports.oddsFormat}
@@ -292,6 +342,7 @@ export default function App({
                   key={dataMode}
                   sports={sports}
                   format={oddsFormat}
+                  marks={sportsMarks}
                   listFooter={
                     dataMode === 'live' && (
                       <nav className={styles.pagination} aria-label={t.sports.gamePages}>
@@ -338,28 +389,22 @@ export default function App({
         </Routes>
       </main>
 
-      {mode === 'signal' &&
-        signalPanelProps &&
+      {signalPanelProps &&
         (signalsInDrawer ? (
           <Drawer open={signalsDrawerOpen} onClose={() => setSignalsDrawerOpen(false)} side="right" label={t.signals.panel}>
             <SignalPanel
               variant="drawer"
               open
               onToggle={() => setSignalsDrawerOpen(false)}
+              {...signalPanelProps}
               onSelect={(signal) => {
                 setSignalsDrawerOpen(false);
-                pickHighlight(signal);
+                signalPanelProps.onSelect(signal);
               }}
-              {...signalPanelProps}
             />
           </Drawer>
         ) : (
-          <SignalPanel
-            open={signalsOpen}
-            onToggle={() => setSignalsOpen((open) => !open)}
-            onSelect={pickHighlight}
-            {...signalPanelProps}
-          />
+          <SignalPanel open={signalsOpen} onToggle={() => setSignalsOpen((open) => !open)} {...signalPanelProps} />
         ))}
 
       {showTerminal &&

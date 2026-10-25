@@ -16,6 +16,7 @@ import {
   type Payment,
   type RedeemCode,
 } from './admin';
+import type { ProductId } from './catalog';
 import type { BillingPeriod } from './plans';
 import {
   DEMO_TODAY,
@@ -125,6 +126,33 @@ export type EntitlementStatus = 'active' | 'expired' | 'revoked';
 export function entitlementStatus(e: Entitlement, today = DEMO_TODAY): EntitlementStatus {
   if (e.revoked) return 'revoked';
   return e.expires < today ? 'expired' : 'active';
+}
+
+/** What a member sees now: the products of the items in the versions they hold, and which sports (Sport items). */
+export interface Access {
+  products: ProductId[];
+  /** Sport item ids, e.g. ['soccer']; the same codes as a sport signal's sport. */
+  sports: string[];
+}
+
+export function memberAccess(b: Backend, member: string, today = DEMO_TODAY): Access {
+  const held = new Set(
+    b.entitlements
+      .filter((e) => e.member === member && entitlementStatus(e, today) === 'active')
+      .flatMap((e) => versionById(b, e.versionId).items),
+  );
+  const items = b.items.filter((item) => held.has(item.id));
+  return {
+    products: [...new Set(items.map((item) => item.product))],
+    sports: items.filter((item) => item.product === 'sport').map((item) => item.id),
+  };
+}
+
+/** The entitlement check of the Signal and Sports pages: the product, and for Sport only the sports held. */
+export function canSee(access: Access, product: ProductId, sport: string | null): boolean {
+  return (
+    access.products.includes(product) && (product !== 'sport' || (sport !== null && access.sports.includes(sport)))
+  );
 }
 
 const nextId = (prefix: string, ids: string[]) =>

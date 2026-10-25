@@ -161,6 +161,11 @@
   border-bottom: 0;
 }
 
+/* The line of the card picked in the signals column, as the Signal page tints its row. */
+.pickedLine {
+  background: #fffbeb;
+}
+
 .lineTitle {
   font-size: 13px;
   font-weight: 600;

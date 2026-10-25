@@ -260,6 +260,8 @@ export const en = {
     oddsNote: 'Odds come from each outcome’s buy price; lines are shown as Polymarket names them.',
     start: 'Start',
     league: 'League',
+    lockedSignals: (sport: string, n: number) =>
+      `${sport} has ${plural(n, 'LAC signal', 'LAC signals')} today. Subscribe to unlock`,
   },
 
   plans: {

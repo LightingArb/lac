@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { useT } from '../../i18n';
 import { cx } from '../../lib/cx';
 import { mainLine, moneylines, threeWay, type OddsFormat, type SportsGame, type SportsMarket } from '../../lib/sports';
+import { NO_MARKS, type CellMarks } from '../../lib/sportsSignals';
 import { GameStatus, OddsChip, Teams, ThreeCells, utcTime } from './SportsParts';
 import styles from './SportsList.module.css';
 
@@ -13,10 +14,21 @@ interface SportsListProps {
   format: OddsFormat;
   onSelect: (game: SportsGame) => void;
   footer?: ReactNode;
+  /** Subscribers: ROI on the cells with signals, and the picked card's cell. */
+  marks?: CellMarks;
 }
 
 /** Left-middle column: one row per game (all its events merged) with its moneyline, main spread and main total. */
-export function SportsList({ title, games, emptyText, selectedId, format, onSelect, footer }: SportsListProps) {
+export function SportsList({
+  title,
+  games,
+  emptyText,
+  selectedId,
+  format,
+  onSelect,
+  footer,
+  marks = NO_MARKS,
+}: SportsListProps) {
   const t = useT();
   useEffect(() => {
     if (selectedId) document.getElementById(`game-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
@@ -65,13 +77,13 @@ export function SportsList({ title, games, emptyText, selectedId, format, onSele
             )}
           </span>
           <Cell label={t.sports.columns.moneyline}>
-            <Moneyline game={game} format={format} />
+            <Moneyline game={game} format={format} marks={marks} />
           </Cell>
           <Cell label={t.sports.columns.spreads}>
-            <Line market={mainLine(game.markets, 'spreads')} format={format} />
+            <Line market={mainLine(game.markets, 'spreads')} format={format} marks={marks} />
           </Cell>
           <Cell label={t.sports.columns.totals}>
-            <Line market={mainLine(game.markets, 'totals')} format={format} />
+            <Line market={mainLine(game.markets, 'totals')} format={format} marks={marks} />
           </Cell>
         </button>
       ))}
@@ -93,16 +105,16 @@ function Cell({ label, children }: { label: string; children: ReactNode }) {
  * Three Yes/No moneylines: one row of three cells, team 1 / draw / team 2 (all "—" when they can't be placed).
  * One market with team outcomes: both outcomes. Any other number of markets: each market's Yes.
  */
-function Moneyline({ game, format }: { game: SportsGame; format: OddsFormat }) {
+function Moneyline({ game, format, marks }: { game: SportsGame; format: OddsFormat; marks: CellMarks }) {
   const cells = threeWay(game);
-  if (cells) return <ThreeCells game={game} cells={cells} format={format} />;
+  if (cells) return <ThreeCells game={game} cells={cells} format={format} marks={marks} />;
   const markets = moneylines(game.markets);
   if (!markets.length) return <span className={styles.none}>—</span>;
   if (markets.length === 1) {
     return (
       <>
         {markets[0].outcomes.map((o) => (
-          <OddsChip key={o.index} label={o.label} outcome={o} format={format} />
+          <OddsChip key={o.index} label={o.label} outcome={o} format={format} marketId={markets[0].id} marks={marks} />
         ))}
       </>
     );
@@ -115,13 +127,15 @@ function Moneyline({ game, format }: { game: SportsGame; format: OddsFormat }) {
           label={m.title}
           outcome={m.outcomes.find((o) => o.label === 'Yes') ?? m.outcomes[0] ?? null}
           format={format}
+          marketId={m.id}
+          marks={marks}
         />
       ))}
     </>
   );
 }
 
-function Line({ market, format }: { market: SportsMarket | null; format: OddsFormat }) {
+function Line({ market, format, marks }: { market: SportsMarket | null; format: OddsFormat; marks: CellMarks }) {
   if (!market) return <span className={styles.none}>—</span>;
   return (
     <>
@@ -129,7 +143,7 @@ function Line({ market, format }: { market: SportsMarket | null; format: OddsFor
         {market.title}
       </span>
       {market.outcomes.map((o) => (
-        <OddsChip key={o.index} label={o.label} outcome={o} format={format} />
+        <OddsChip key={o.index} label={o.label} outcome={o} format={format} marketId={market.id} marks={marks} />
       ))}
     </>
   );

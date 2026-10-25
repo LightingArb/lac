@@ -1,5 +1,6 @@
 import type { Ref } from 'react';
 import { useT } from '../../i18n';
+import { cx } from '../../lib/cx';
 import {
   groupMarkets,
   otherByEvent,
@@ -9,6 +10,7 @@ import {
   type SportsGame,
   type SportsMarket,
 } from '../../lib/sports';
+import { NO_MARKS, type CellMarks } from '../../lib/sportsSignals';
 import { Badge } from '../ui/Badge';
 import { GameStatus, OddsChip, ThreeCells, utcTime } from './SportsParts';
 import styles from './SportsDetail.module.css';
@@ -18,6 +20,8 @@ interface SportsDetailProps {
   game: SportsGame | null;
   format: OddsFormat;
   emptyText: string;
+  /** Subscribers: ROI on the cells with signals; the picked card's cell is marked and its line tinted. */
+  marks?: CellMarks;
 }
 
 const GROUPS: Exclude<keyof MarketGroups, 'other'>[] = ['moneyline', 'spreads', 'totals'];
@@ -26,7 +30,7 @@ const GROUPS: Exclude<keyof MarketGroups, 'other'>[] = ['moneyline', 'spreads', 
  * Right-middle column: every open market of every event in the game, grouped; "other" markets under one
  * heading per event (Total Corners, Player Props…). Each line as Polymarket names it.
  */
-export function SportsDetail({ ref, game, format, emptyText }: SportsDetailProps) {
+export function SportsDetail({ ref, game, format, emptyText, marks = NO_MARKS }: SportsDetailProps) {
   const t = useT();
   if (!game) {
     return (
@@ -73,8 +77,10 @@ export function SportsDetail({ ref, game, format, emptyText }: SportsDetailProps
               <h2 className={styles.groupTitle}>
                 {t.sports.groups[key]} <span className={styles.groupCount}>{groups[key].length}</span>
               </h2>
-              {key === 'moneyline' && cells && <ThreeCells game={game} cells={cells} format={format} size="md" />}
-              <Lines markets={groups[key]} format={format} />
+              {key === 'moneyline' && cells && (
+                <ThreeCells game={game} cells={cells} format={format} size="md" marks={marks} />
+              )}
+              <Lines markets={groups[key]} format={format} marks={marks} />
             </div>
           ) : null,
         )}
@@ -86,7 +92,7 @@ export function SportsDetail({ ref, game, format, emptyText }: SportsDetailProps
             {other.map((part) => (
               <div key={part.eventId} className={styles.subGroup}>
                 <h3 className={styles.subTitle}>{part.heading}</h3>
-                <Lines markets={part.markets} format={format} />
+                <Lines markets={part.markets} format={format} marks={marks} />
               </div>
             ))}
           </div>
@@ -98,15 +104,28 @@ export function SportsDetail({ ref, game, format, emptyText }: SportsDetailProps
   );
 }
 
-function Lines({ markets, format }: { markets: SportsMarket[]; format: OddsFormat }) {
+function Lines({ markets, format, marks }: { markets: SportsMarket[]; format: OddsFormat; marks: CellMarks }) {
   return (
     <div className={styles.lines}>
       {markets.map((market) => (
-        <div key={market.id} id={`line-${market.id}`} className={styles.line}>
+        <div
+          key={market.id}
+          id={`line-${market.id}`}
+          className={cx(styles.line, marks.picked?.marketId === market.id && styles.pickedLine)}
+        >
           <span className={styles.lineTitle}>{market.title}</span>
           <span className={styles.outcomes}>
             {market.outcomes.map((o) => (
-              <OddsChip key={o.index} label={o.label} outcome={o} format={format} withPrice size="md" />
+              <OddsChip
+                key={o.index}
+                label={o.label}
+                outcome={o}
+                format={format}
+                withPrice
+                size="md"
+                marketId={market.id}
+                marks={marks}
+              />
             ))}
           </span>
         </div>

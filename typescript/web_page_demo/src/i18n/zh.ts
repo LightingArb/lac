@@ -279,6 +279,7 @@ export const zh: Messages = {
     oddsNote: '賠率用每個結果的買進價換算；讓分與大小分的線照 Polymarket 原本的名稱顯示。',
     start: '開賽',
     league: '聯賽',
+    lockedSignals: (sport, n) => `${sport}今天有 ${n} 個 LAC 訊號，訂閱解鎖`,
   },
 
   plans: {

@@ -12,6 +12,7 @@ import {
   type Side,
   type Signal,
 } from '../data/catalog';
+import { canSee, type Access } from '../data/backend';
 import { DEMO_ACCOUNT } from '../data/terminal';
 import type { Messages } from '../i18n/en';
 
@@ -25,6 +26,8 @@ export interface PricedSignal extends Signal {
   fair: number;
   /** Expected value per share: fair − entry. */
   ev: number;
+  /** Expected return of 1 staked at entry: fair ÷ entry − 1. */
+  roi: number;
 }
 
 export interface WorkspaceState {
@@ -108,36 +111,34 @@ export function marketAnchorId(eventId: string, outcomeId: string): string {
   return `mk-${eventId}-${outcomeId}`;
 }
 
-export function priceSignals(plan: Record<ProductId, boolean>): PricedSignal[] {
-  return SIGNALS.filter((s) => plan[s.product]).map((s) => {
+export function priceSignals(access: Access): PricedSignal[] {
+  return SIGNALS.filter((s) => canSee(access, s.product, s.sport ?? null)).map((s) => {
     const outcome = findOutcome(EVENTS_BY_ID[s.eventId], s.outcomeId);
     const entry = (s.side === 'yes' ? outcome.yes : outcome.no)!;
     const fair = fairValue(outcome, s.side);
-    return { ...s, entry, fair, ev: fair - entry };
+    return { ...s, entry, fair, ev: fair - entry, roi: fair / entry - 1 };
   });
 }
 
 /** Everything the Prediction and Signal pages show, derived from UI state. */
-export function deriveWorkspace(
-  mode: WorkspaceMode,
-  state: WorkspaceState,
-  plan: Record<ProductId, boolean>,
-  t: Messages,
-): Workspace {
+export function deriveWorkspace(mode: WorkspaceMode, state: WorkspaceState, access: Access, t: Messages): Workspace {
   const query = state.query.trim().toLowerCase();
   const searching = query !== '';
   const matches = (e: MarketEvent) => e.title.toLowerCase().includes(query);
 
-  const signals = priceSignals(plan);
+  const signals = priceSignals(access);
   const signalCountByEvent: Record<string, number> = {};
   const signalByCell: Record<string, PricedSignal> = {};
   for (const s of signals) {
     signalCountByEvent[s.eventId] = (signalCountByEvent[s.eventId] ?? 0) + 1;
     signalByCell[cellKey(s.eventId, s.outcomeId, s.side)] = s;
   }
-  const visibleProducts = PRODUCTS.filter((p) => plan[p.id] && signals.some((s) => s.product === p.id));
+  const visibleProducts = PRODUCTS.filter((p) => signals.some((s) => s.product === p.id));
   const visibleIds = new Set<string>(visibleProducts.map((p) => p.id));
-  const covered = EVENTS.filter((e) => e.lac && visibleIds.has(e.lac.product));
+  // Sport events only for the sports the customer holds, by the same check as the signals.
+  const listed = (e: MarketEvent) =>
+    !!e.lac && visibleIds.has(e.lac.product) && canSee(access, e.lac.product, e.lac.sport ?? null);
+  const covered = EVENTS.filter(listed);
 
   const shared = { mode, searching, signals, visibleProducts, signalCountByEvent, signalByCell };
 
@@ -186,8 +187,7 @@ export function deriveWorkspace(
     : covered.filter((e) => (active === 'trending' ? signalCountByEvent[e.id] : e.lac?.product === active));
 
   const candidate = EVENTS_BY_ID[state.signalEventId];
-  const selected =
-    candidate?.lac && visibleIds.has(candidate.lac.product) ? candidate : (events[0] ?? covered[0] ?? null);
+  const selected = candidate && listed(candidate) ? candidate : (events[0] ?? covered[0] ?? null);
   const picked: Highlight | null =
     signals.find((s) => s.id === state.highlightId) ??
     DEMO_ACCOUNT.positions.find((p) => p.id === state.highlightId) ??
@@ -205,10 +205,17 @@ export function deriveWorkspace(
   };
 }
 
-/** Signal lists an event when LAC covers it and its product has signals in the customer's plan right now. */
-export function signalCovers(eventId: string, plan: Record<ProductId, boolean>): boolean {
-  const product = EVENTS_BY_ID[eventId]?.lac?.product;
-  return !!product && plan[product] && priceSignals(plan).some((s) => s.product === product);
+/**
+ * Signal lists an event when LAC covers it, the customer may see it (product, and sport for Sport) and its
+ * product has signals for the customer right now.
+ */
+export function signalCovers(eventId: string, access: Access): boolean {
+  const lac = EVENTS_BY_ID[eventId]?.lac;
+  return (
+    !!lac &&
+    canSee(access, lac.product, lac.sport ?? null) &&
+    priceSignals(access).some((s) => s.product === lac.product)
+  );
 }
 
 /**
