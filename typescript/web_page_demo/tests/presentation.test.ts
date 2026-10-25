@@ -84,6 +84,27 @@ import { DEMO_SPORTS_SIGNALS, SPORTS_DEMO_NOW, type SportsSignal } from '../src/
 import { SignalPanel } from '../src/components/signals/SignalPanel';
 import { SportsDetail } from '../src/components/sports/SportsDetail';
 import { cellMarks, gameOf, signalCard, signalState, sportsSignals } from '../src/lib/sportsSignals';
+import { DEFAULT_HOLDING, DEMO_STOCKS, HOLDINGS, STOCKS_DEMO_TODAY } from '../src/data/stocks';
+import { CONGRESS_MEMBERS, CONGRESS_TRADES } from '../src/data/congress';
+import { DEMO_FUNDS } from '../src/data/funds';
+import { StockSelector } from '../src/components/stocks/StockSelector';
+import {
+  amountText,
+  chanceText,
+  congressMembers,
+  dailyCandles,
+  dayStart,
+  fairOf,
+  formatPrice,
+  fundHoldings,
+  fundsHolding,
+  memberTrades,
+  searchFunds,
+  searchStocks,
+  stockByCode,
+  tabsFor,
+  tradeMarks,
+} from '../src/lib/stocks';
 import { liveVersion } from '../src/data/products';
 import { en } from '../src/i18n/en';
 import { zh } from '../src/i18n/zh';
@@ -764,6 +785,119 @@ test('Demo sports signals sit on Demo cells: entry is the buy price, ev and roi 
   assert.ok(count('soccer') >= 3 && count('basketball') >= 2 && shown.some((s) => s.sport !== 'soccer' && s.sport !== 'basketball'));
   assert.ok(DEMO_SPORTS_SIGNALS.some((s) => s.ev <= 0 && s.status === 'active' && signalState(s, everySport, NOW) === 'hidden'));
   assert.ok(DEMO_SPORTS_SIGNALS.some((s) => s.ev > 0 && Date.parse(s.validUntil) <= NOW && signalState(s, everySport, NOW) === 'hidden'));
+});
+
+// Stocks page (Demo).
+const selector = (language: 'en' | 'zh-Hant', props: Partial<Parameters<typeof StockSelector>[0]> = {}) =>
+  renderIn(language, createElement(StockSelector, {
+    market: 'tw', onMarket: () => {}, tab: 'analysis', onTab: () => {}, holding: DEFAULT_HOLDING, selectedCode: '2330', onPick: () => {}, ...props }));
+test('Stocks: the holding period picks its own fair price and chance; the chance reads "到 1,400 的機率 56.7%"', () => {
+  const tsmc = stockByCode('2330')!;
+  assert.equal(DEFAULT_HOLDING, 'Q+4');
+  assert.deepEqual(HOLDINGS.map((h) => fairOf(tsmc, h)), [
+    { price: 1120, chance: 61.2 }, { price: 1180, chance: 59.8 }, { price: 1400, chance: 56.7 }, { price: 1520, chance: 54.1 }, { price: 1650, chance: 52.3 },
+  ]);
+  assert.equal(chanceText(zh, tsmc, 'Q+4'), '到 1,400 的機率 56.7%');
+  assert.equal(chanceText(en, tsmc, 'Q+4'), '56.7% to reach 1,400');
+  assert.equal(chanceText(en, stockByCode('AAPL')!, 'Q+1'), '59.4% to reach 268.00');
+  assert.equal(chanceText(zh, stockByCode('1301')!, 'Q+12'), '到 48 的機率 49.5%');
+  assert.deepEqual([formatPrice('tw', 1085), formatPrice('tw', 38.75), formatPrice('us', 262.35), formatPrice('us', 290)], ['1,085', '38.75', '262.35', '290.00']);
+  for (const stock of DEMO_STOCKS) {
+    assert.ok(stock.fair.length === 5 && stock.chance.length === 5, stock.code);
+    assert.ok(stock.chance.every((c) => c > 0 && c < 100 && Math.round(c * 10) === c * 10), `${stock.code} chances to one decimal`);
+  }
+  // The list follows the holding period; "win rate" is never used.
+  const q1 = selector('zh-Hant', { holding: 'Q+1' });
+  const q12 = selector('zh-Hant', { holding: 'Q+12' });
+  assert.ok(q1.includes('合理價格 Q+1') && q1.includes('到 1,120 的機率 61.2%') && !q1.includes('到 1,650'));
+  assert.ok(q12.includes('合理價格 Q+12') && q12.includes('到 1,650 的機率 52.3%'));
+  assert.ok(selector('en', { market: 'us' }).includes('56.1% to reach 290.00'));
+  for (const html of [q1, q12, selector('en')]) assert.ok(!html.includes('勝率') && !/win rate/i.test(html));
+  assert.deepEqual(searchStocks('tw', '台積').map((s) => s.code), ['2330']);
+  assert.deepEqual(searchStocks('us', 'nv').map((s) => s.code), ['NVDA']);
+  assert.deepEqual(searchStocks('tw', 'tsmc').map((s) => s.code), ['2330']);
+  assert.equal(searchStocks('tw', '').length, 10);
+  assert.equal(searchStocks('us', '').length, 10);
+});
+test('Stocks: daily candles repeat for a seed, cover about three years of weekdays, stay consistent and end at the price', () => {
+  const today = dayStart(STOCKS_DEMO_TODAY);
+  for (const stock of DEMO_STOCKS) {
+    const candles = dailyCandles(stock);
+    assert.deepEqual(dailyCandles(stock), candles, `${stock.code} same seed, same candles`);
+    assert.ok(candles.length >= 775 && candles.length <= 790, `${stock.code}: ${candles.length} weekdays`);
+    assert.equal(candles.at(-1)!.timestamp, today);
+    assert.ok(today - candles[0].timestamp <= 3 * 366 * 86400000 && today - candles[0].timestamp >= 3 * 364 * 86400000, 'about three years');
+    candles.forEach((c, i) => {
+      const day = new Date(c.timestamp).getUTCDay();
+      assert.ok(day !== 0 && day !== 6, `${stock.code} weekday`);
+      assert.ok(i === 0 || c.timestamp > candles[i - 1].timestamp, 'in order');
+      assert.ok(c.high >= Math.max(c.open, c.close) && c.low <= Math.min(c.open, c.close) && c.low > 0, `${stock.code} ${i} high/low`);
+      assert.ok(Number.isInteger(c.volume) && c.volume > 0);
+    });
+    assert.equal(candles.at(-1)!.close, stock.price, `${stock.code} last close is the price`);
+  }
+  const tsmc = stockByCode('2330')!;
+  assert.notDeepEqual(dailyCandles({ ...tsmc, seed: 1 }).slice(0, 5), dailyCandles(tsmc).slice(0, 5), 'another seed, other candles');
+});
+test('Congress: trades newest first, filed 1 to 45 days later, on chart days; marks for one member and stock', () => {
+  const memberIds = new Set(CONGRESS_MEMBERS.map((m) => m.id));
+  const days = new Map(DEMO_STOCKS.filter((s) => s.market === 'us').map((s) => [s.code, new Set(dailyCandles(s).map((c) => c.timestamp))]));
+  for (const trade of CONGRESS_TRADES) {
+    assert.ok(memberIds.has(trade.memberId));
+    assert.ok(days.get(trade.code)?.has(dayStart(trade.tradedOn)), `${trade.id}: ${trade.code} ${trade.tradedOn} is a candle of a US Demo stock`);
+    const gap = (dayStart(trade.filedOn) - dayStart(trade.tradedOn)) / 86400000;
+    assert.ok(gap >= 1 && gap <= 45, `${trade.id} filed ${gap} days later`);
+    assert.ok(trade.filedOn <= STOCKS_DEMO_TODAY);
+  }
+  for (const member of CONGRESS_MEMBERS) {
+    const trades = memberTrades(member.id);
+    assert.ok(trades.length >= 3 && trades.length <= 19, member.id);
+    assert.deepEqual(trades.map((x) => x.tradedOn), trades.map((x) => x.tradedOn).sort().reverse(), `${member.id} newest first`);
+  }
+  assert.deepEqual(congressMembers().map((r) => [r.member.id, r.trades, r.lastFiled]), [
+    ['dana-whitcombe', 11, '2026-10-15'], ['morgan-ellery', 10, '2026-10-01'], ['riley-okonjo', 14, '2026-09-21'],
+    ['avery-linwood', 7, '2026-08-30'], ['elliot-varga', 3, '2026-03-23'],
+  ]);
+  const marks = tradeMarks('riley-okonjo', 'TSLA');
+  assert.deepEqual(marks.map((m) => [m.tradedOn, m.side, m.filedOn, m.amount]), [
+    ['2023-11-14', 'buy', '2023-12-14', '$1,001 – $15,000'],
+    ['2024-08-06', 'buy', '2024-09-04', '$15,001 – $50,000'],
+    ['2025-01-14', 'sell', '2025-02-05', '$15,001 – $50,000'],
+    ['2025-09-09', 'buy', '2025-10-17', '$1,001 – $15,000'],
+    ['2026-02-10', 'sell', '2026-03-05', '$1,001 – $15,000'],
+    ['2026-06-30', 'buy', '2026-07-15', '$1,001 – $15,000'],
+  ]);
+  assert.ok(marks.every((m) => m.timestamp === dayStart(m.tradedOn)));
+  assert.deepEqual(tradeMarks('riley-okonjo', 'XOM'), [], 'only that member and that stock');
+  assert.deepEqual(tradeMarks('morgan-ellery', 'XOM').map((m) => m.side), ['buy', 'buy', 'sell', 'buy', 'sell']);
+  assert.deepEqual([amountText(0), amountText(1), amountText(2)], ['$1,001 – $15,000', '$15,001 – $50,000', '$50,001 – $100,000']);
+  const html = selector('zh-Hant', { market: 'us', tab: 'congress', selectedCode: 'AAPL' });
+  assert.ok(html.includes('Riley Okonjo') && html.includes('眾議院') && html.includes('虛構'));
+});
+test('Funds: holdings by weight plus "others" make 100%; funds holding a stock by weight; Taiwan has no congress tab', () => {
+  for (const fund of DEMO_FUNDS) {
+    const rows = fundHoldings(fund);
+    const listed = rows.slice(0, -1);
+    assert.equal(rows.at(-1)!.stock, null, `${fund.code} ends with others`);
+    assert.ok(listed.every((r) => r.stock!.market === fund.market), `${fund.code} holds its own market's Demo stocks`);
+    assert.deepEqual(listed.map((r) => r.weight), listed.map((r) => r.weight).sort((a, b) => b - a), `${fund.code} by weight`);
+    assert.equal(rows.reduce((sum, r) => sum + Math.round(r.weight * 10), 0), 1000, `${fund.code} adds up to 100%`);
+    assert.ok(rows.at(-1)!.weight >= 0);
+  }
+  assert.ok(DEMO_FUNDS.filter((f) => f.market === 'tw').length >= 4 && DEMO_FUNDS.filter((f) => f.market === 'us').length >= 4);
+  const top50 = fundHoldings(DEMO_FUNDS.find((f) => f.code === '0050')!);
+  assert.deepEqual([top50[0].stock!.code, top50[0].weight, top50.at(-1)!.weight], ['2330', 58.2, 23]);
+  assert.deepEqual(fundsHolding('2303').map((h) => [h.fund.code, h.weight]), [['00878', 3.8], ['0056', 3.1], ['0050', 1], ['006208', 1]]);
+  assert.deepEqual(fundsHolding('AAPL').map((h) => h.fund.code), ['XLK', 'QQQ', 'SPY', 'VTI']);
+  assert.deepEqual(searchFunds('tw', '高股息').map((f) => f.code), ['0056', '00878']);
+  assert.deepEqual(searchFunds('us', 'qqq').map((f) => f.code), ['QQQ']);
+  // Congress filings are US-only.
+  assert.deepEqual(tabsFor('tw'), ['analysis', 'funds']);
+  assert.deepEqual(tabsFor('us'), ['analysis', 'congress', 'funds']);
+  assert.ok(!selector('zh-Hant', { market: 'tw' }).includes('國會持股') && selector('zh-Hant', { market: 'us' }).includes('國會持股'));
+  assert.ok(!selector('en', { market: 'tw' }).includes('Congress trades'));
+  const funds = selector('zh-Hant', { tab: 'funds' });
+  assert.ok(funds.includes('元大台灣50') && funds.includes('資料日期 2026/9/30') && funds.includes('其他') && funds.includes('23.0%'));
 });
 
 test('History path breaks on null minutes/buckets and renders isolated real points', () => {

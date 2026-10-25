@@ -1,0 +1,285 @@
+.selector {
+  display: flex;
+  flex: 1.2 1 460px;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--color-canvas);
+  container-type: inline-size;
+}
+
+/* Content area too narrow for two columns (main's container): the selector on top of the detail. */
+@container (max-width: 639px) {
+  .selector {
+    flex: none;
+    overflow: visible;
+  }
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tab {
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tabActive {
+  border-bottom-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+
+.search:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.note {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Rows: one grid per list, header and rows share the columns. */
+
+.table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.head {
+  padding: 0 12px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.row {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+}
+
+button.row:hover {
+  border-color: var(--color-border-strong);
+}
+
+.rowActive,
+button.rowActive:hover {
+  border: 1.5px solid var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.stockRow,
+.memberRow,
+.tradeRow,
+.holdingRow {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+}
+
+.stockRow {
+  grid-template-columns: 56px minmax(80px, 1fr) 72px 72px minmax(120px, 1.4fr);
+}
+
+.memberRow {
+  grid-template-columns: minmax(140px, 1fr) 64px 110px;
+}
+
+.tradeRow {
+  grid-template-columns: 96px 96px 44px 56px minmax(120px, 1fr);
+}
+
+.holdingRow {
+  grid-template-columns: 72px minmax(100px, 1fr) 64px;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.code {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fair {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.chance {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.sub {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.memberName {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memberHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px;
+  font-size: 15px;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.buy {
+  color: #16a34a;
+  font-weight: 700;
+}
+
+.sell {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.others {
+  color: var(--color-text-muted);
+}
+
+.resultHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 4px 4px 0;
+  font-size: 14px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.chipActive {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+/* The selector itself narrow (phone, or a narrow column): each row wraps under its first cells. */
+@container (max-width: 520px) {
+  .stockRow {
+    grid-template-columns: 52px minmax(0, 1fr) auto;
+  }
+
+  .stockRow > :nth-child(4) {
+    display: none;
+  }
+
+  .stockRow > :nth-child(5) {
+    grid-column: 2 / 4;
+  }
+
+  .head.stockRow > :nth-child(5) {
+    display: none;
+  }
+
+  .tradeRow {
+    grid-template-columns: 1fr 1fr auto auto;
+  }
+
+  .tradeRow > :nth-child(5) {
+    grid-column: 1 / 5;
+  }
+
+  .head.tradeRow > :nth-child(5) {
+    display: none;
+  }
+
+  .memberRow {
+    grid-template-columns: minmax(0, 1fr) 40px 96px;
+  }
+}

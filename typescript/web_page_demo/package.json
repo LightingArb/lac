@@ -14,6 +14,7 @@
   "dependencies": {
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
+    "klinecharts": "^10.1.0",
     "pg": "^8.23.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

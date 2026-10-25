@@ -11,6 +11,7 @@ import { PRODUCTS, type CategoryId } from './data/catalog';
 import type { Preferences } from './data/preferences';
 import { DEFAULT_REFERRAL_CODE, MY_AGENTS } from './data/referral';
 import { DEMO_SPORTS_SIGNALS, SPORTS_DEMO_NOW } from './data/sportsSignals';
+import { DEFAULT_HOLDING, HOLDINGS, type Holding } from './data/stocks';
 import { DEMO_ACCOUNT, type Position } from './data/terminal';
 import { memberAccess, memberByEmail, type Backend } from './data/backend';
 import { ME, type WithdrawalDraft } from './data/withdrawals';
@@ -87,6 +88,7 @@ export default function App({
   const live = useLiveWorkspace(dataMode === 'live' && mode === 'prediction', liveCategory, liveQuery);
   const [sportsQuery, setSportsQuery] = useState('');
   const [oddsFormat, setOddsFormat] = useState<OddsFormat>('decimal');
+  const [holding, setHolding] = useState<Holding>(DEFAULT_HOLDING);
   const sports = useSportsWorkspace(mode === 'sports', dataMode, sportsQuery);
   // The terminal is Demo-only for now: Live Signal still has no signals and no wallet.
   const showTerminal = mode === 'signal' && dataMode === 'demo';
@@ -319,6 +321,18 @@ export default function App({
                 : null
             }
             onOpenTerminal={terminalInDrawer && showTerminal ? () => setTerminalDrawerOpen(true) : null}
+            actions={
+              mode === 'stocks' &&
+              dataMode === 'demo' && (
+                <SegmentedControl
+                  label={t.stocks.holding}
+                  size="sm"
+                  value={holding}
+                  onChange={setHolding}
+                  options={HOLDINGS.map((value) => ({ value, label: value }))}
+                />
+              )
+            }
           />
         )}
         <Routes>
@@ -360,7 +374,10 @@ export default function App({
               )
             }
           />
-          <Route path="stocks" element={<StocksPage />} />
+          <Route
+            path="stocks"
+            element={<StocksPage dataMode={dataMode} holding={holding} theme={preferences.theme} />}
+          />
           <Route path="products" element={<ProductsPage items={backend.items} versions={backend.versions} />} />
           <Route
             path="referral"
