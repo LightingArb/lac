@@ -123,6 +123,18 @@
   font-weight: 700;
 }
 
+.subGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subTitle {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .groupCount {
   color: var(--color-text-muted);
   font-size: 12px;

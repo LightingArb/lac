@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { BuyUsdtDialog } from './components/BuyUsdtDialog';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
@@ -18,6 +18,8 @@ import {
   INITIAL_WORKSPACE,
   deriveWorkspace,
   focusHighlight,
+  focusPrediction,
+  signalCovers,
   type Highlight,
   type SignalCategoryId,
   type WorkspaceState,
@@ -59,6 +61,7 @@ export default function App({
 }: AppProps) {
   const t = useT();
   const mode = modeFromPath(useLocation().pathname);
+  const navigate = useNavigate();
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const signalsInDrawer = useMediaQuery(COMPACT_QUERY);
   const terminalInDrawer = useMediaQuery(TERMINAL_QUERY);
@@ -123,6 +126,16 @@ export default function App({
   // A signal or a terminal position opens its event in the middle columns and marks its Yes/No button.
   const pickHighlight = (cell: Highlight) => {
     if (workspace) update(focusHighlight(workspace, cell));
+  };
+
+  // A position stays on Signal when Signal lists its event (it has LAC signals); otherwise it opens on Prediction.
+  const pickPosition = (position: Position) => {
+    if (signalCovers(position.eventId, CUSTOMER_PLAN)) {
+      pickHighlight(position);
+      return;
+    }
+    update(focusPrediction(state, position));
+    navigate('/prediction');
   };
 
   // Keyed by mode so Prediction and Signal don't share scroll position or chart settings.
@@ -365,7 +378,7 @@ export default function App({
               activeId={state.highlightId}
               onSelect={(position: Position) => {
                 setTerminalDrawerOpen(false);
-                pickHighlight(position);
+                pickPosition(position);
               }}
             />
           </Drawer>
@@ -375,7 +388,7 @@ export default function App({
             onToggle={() => setTerminalOpen((open) => !open)}
             account={DEMO_ACCOUNT}
             activeId={state.highlightId}
-            onSelect={pickHighlight}
+            onSelect={pickPosition}
           />
         ))}
 

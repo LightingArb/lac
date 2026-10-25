@@ -14,7 +14,7 @@ assert.equal(env.DB_NAME, 'lac_data');
 assert.equal(env.DB_PORT, '5432');
 const dir = mkdtempSync(join(tmpdir(), 'lac-live-sql-'));
 await build({ entryPoints: ['server/live.ts'], bundle: true, platform: 'node', format: 'cjs', external: ['pg-native'], outfile: join(dir, 'reader.cjs') });
-const { BID, ASK, MID, HISTORY, MONEYLINE, SPORTS_LEAGUES, SPORTS_EVENTS, SPORTS_EVENT, SPORTS_MARKETS } =
+const { BID, ASK, MID, HISTORY, MONEYLINE, SPORTS_LEAGUES, SPORTS_GAMES, SPORTS_GAME_DETAIL, SPORTS_MARKETS } =
   createRequire(import.meta.url)(join(dir, 'reader.cjs'));
 const pool = new Pool({ host: env.DB_HOST, port: Number(env.DB_PORT), database: env.DB_NAME, user: env.DB_USER, password: env.DB_PASSWORD,
   max: 1, options: '-c default_transaction_read_only=on -c statement_timeout=15000 -c timezone=UTC' });
@@ -96,52 +96,75 @@ test('Only one open moneyline per event is eligible, independent of market page'
 });
 
 // Sports: synthetic events and markets in VALUES CTEs in place of the m_live tables.
-const two = `'[{"name":"Heat","abbreviation":"mia","logo":"x"},{"name":"Hornets","abbreviation":"cha"}]'::jsonb`;
+const heat = `'[{"name":"Heat","abbreviation":"mia","logo":"x"},{"name":"Hornets","abbreviation":"cha","alias":"Charlotte"}]'::jsonb`;
+const hornets = `'[{"name":"Hornets","abbreviation":"cha"},{"name":"Heat","abbreviation":"mia"}]'::jsonb`;
+const lakers = `'[{"name":"Lakers","abbreviation":"lal"},{"name":"Celtics","abbreviation":"bos"}]'::jsonb`;
 const leafs = `'[{"name":"Maple Leafs","abbreviation":"tor"},{"name":"Canadiens","abbreviation":"mtl"}]'::jsonb`;
+const oilers = `'[{"name":"Oilers","abbreviation":"edm"},{"name":"Flames","abbreviation":"cgy"}]'::jsonb`;
 const three = `'[{"name":"A"},{"name":"B"},{"name":"C"}]'::jsonb`;
 const nba = `'{"sport":"nba","name":"NBA"}'::jsonb`;
 const nhl = `'{"sport":"nhl","name":"NHL"}'::jsonb`;
 const epl = `'{"sport":"epl","name":"Premier League"}'::jsonb`;
-const sportsData = `WITH test_events(event_id,title,sport,teams,score,live,ended,period,elapsed,game_start_at,in_current_scan,active,closed,archived) AS (VALUES
-  ('1','Live late',${nba},${two},'78-71',true,false,'Q3','05:12',TIMESTAMPTZ '2026-10-21 23:30Z',true,true,false,false),
-  ('2','Live early',${nba},${two},'1-0',true,NULL::boolean,'Q1','',TIMESTAMPTZ '2026-10-21 20:00Z',true,true,false,false),
-  ('3','Upcoming B',${nhl},${two},NULL,NULL::boolean,NULL::boolean,NULL,NULL,TIMESTAMPTZ '2026-10-22 02:00Z',true,true,false,false),
-  ('4','Upcoming A',${nhl},${two},NULL,false,false,NULL,NULL,TIMESTAMPTZ '2026-10-22 02:00Z',true,true,false,false),
-  ('5','No start',${epl},${two},NULL,NULL,NULL,NULL,NULL,NULL::timestamptz,true,true,false,false),
-  ('6','Ended',${nba},${two},'101-99',false,true,'F',NULL,TIMESTAMPTZ '2026-10-20 00:00Z',true,true,false,false),
-  ('7','No league',NULL::jsonb,${two},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-23 00:00Z',true,true,false,false),
-  ('8','Three teams',${nba},${three},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-22 01:00Z',true,true,false,false),
-  ('9','Closed',${nba},${two},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-22 01:00Z',true,true,true,false),
-  ('10','Toronto at Montreal',${nhl},${leafs},NULL,NULL,NULL,NULL,NULL,TIMESTAMPTZ '2026-10-22 05:00Z',true,true,false,false)
-), test_markets(event_id,market_id,in_current_scan,active,closed,archived) AS (VALUES
-  ('1','m1',true,true,false,false),('1','m2',true,true,true,false)
+const at = (t) => `TIMESTAMPTZ '${t}'`;
+const open = 'true,true,false,false';
+const sportsData = `WITH test_events(event_id,game_id,title,sport,teams,score,live,ended,period,elapsed,game_start_at,in_current_scan,active,closed,archived) AS (VALUES
+  ('1','g1','Heat vs. Hornets - Exact Margin',${nba},${heat},NULL,NULL::boolean,NULL::boolean,NULL,NULL,${at('2026-10-21 23:30Z')},${open}),
+  ('20','g1','Heat vs. Hornets',${nba},${heat},'78-71',true,false,'Q3','05:12',${at('2026-10-21 23:30Z')},${open}),
+  ('21','g1','Heat vs. Hornets - More Markets',${nba},${heat},NULL,NULL,NULL,NULL,NULL,${at('2026-10-21 23:30Z')},${open}),
+  ('22',NULL,'Heat vs. Hornets - Total Corners',${nba},${hornets},NULL,NULL,NULL,NULL,NULL,${at('2026-10-21 23:30Z')},${open}),
+  ('4','g2','Lakers vs. Celtics',${nba},${lakers},'1-0',true,NULL,'Q1','',${at('2026-10-21 20:00Z')},${open}),
+  ('5','g3','Leafs vs. Habs',${nhl},${leafs},NULL,NULL,NULL,NULL,NULL,${at('2026-10-22 02:00Z')},${open}),
+  ('6','g4','Leafs vs. Habs (replay)',${nhl},${leafs},NULL,false,false,NULL,NULL,${at('2026-10-22 02:00Z')},${open}),
+  ('7',NULL,'Leafs vs. Habs - Total Corners',${nhl},${leafs},NULL,NULL,NULL,NULL,NULL,${at('2026-10-22 02:00Z')},${open}),
+  ('8',NULL,'No start',${epl},${lakers},NULL,NULL,NULL,NULL,NULL,NULL::timestamptz,${open}),
+  ('9',NULL,'No league',NULL::jsonb,${oilers},NULL,NULL,NULL,NULL,NULL,${at('2026-10-23 00:00Z')},${open}),
+  ('30','g6','Oilers vs. Flames - Exact Margin',${nhl},${oilers},NULL,NULL,NULL,NULL,NULL,${at('2026-10-22 05:00Z')},${open}),
+  ('100','g6','Oilers vs. Flames',${nhl},${oilers},NULL,NULL,NULL,NULL,NULL,${at('2026-10-22 05:00Z')},${open}),
+  ('10','g5','Ended',${nba},${lakers},'101-99',false,true,'F',NULL,${at('2026-10-20 00:00Z')},${open}),
+  ('11','g7','Three teams',${nba},${three},NULL,NULL,NULL,NULL,NULL,${at('2026-10-22 01:00Z')},${open}),
+  ('12','g1','Closed',${nba},${heat},NULL,NULL,NULL,NULL,NULL,${at('2026-10-21 23:30Z')},true,true,true,false)
+), test_markets(event_id,market_id,sports_market_type,in_current_scan,active,closed,archived) AS (VALUES
+  ('20','m1','moneyline',${open}),('4','m2','moneyline',${open}),('21','m3','totals',${open}),
+  ('1','m4','exact_margin',${open}),('22','m6','total_corners',${open}),('21','m7','spreads',true,true,true,false),
+  ('5','m5','moneyline',true,true,true,false)
 ), `;
 const sportsSql = (sql) => {
   const body = sql.trim().replaceAll('m_live.m01_event', 'test_events').replaceAll('m_live.m01_market', 'test_markets');
   return body.startsWith('WITH ') ? sportsData + body.slice(5) : sportsData.replace(/, $/, ' ') + body;
 };
-test('Sports games: two teams and open only; in play, then by start (unknown last), ended last; keyset continues', async () => {
-  const events = sportsSql(SPORTS_EVENTS);
-  const { rows } = await pool.query(events, [null, '', null, null, null]);
-  assert.deepEqual(rows.map((row) => row.event_id), ['2', '1', '3', '4', '10', '7', '5', '6']);
-  assert.deepEqual(rows[1].teams, [{ name: 'Heat', abbreviation: 'mia' }, { name: 'Hornets', abbreviation: 'cha' }]);
-  assert.deepEqual([rows[1].league_code, rows[1].league_name, rows[1].market_count], ['nba', 'NBA', 1]);
-  assert.equal(rows[3].start_key, '2026-10-22T02:00:00.000000Z');
-  const after = async (row) => (await pool.query(events, [null, '', row.status_rank, row.start_key, row.event_id])).rows.map((r) => r.event_id);
-  assert.deepEqual(await after(rows[1]), ['3', '4', '10', '7', '5', '6']);
-  assert.deepEqual(await after(rows[2]), ['4', '10', '7', '5', '6']);
-  assert.deepEqual(await after(rows[6]), ['6']);
-  assert.deepEqual(await after(rows[7]), []);
-  const ids = async (leagues, q) => (await pool.query(events, [leagues, q, null, null, null])).rows.map((r) => r.event_id);
-  assert.deepEqual(await ids(['nba'], ''), ['2', '1', '6']);
-  assert.deepEqual(await ids(['nhl', 'epl'], ''), ['3', '4', '10', '5']);
-  assert.deepEqual(await ids([''], ''), ['7']);
-  assert.deepEqual(await ids(null, 'leafs'), ['10']);
-  assert.deepEqual(await ids(null, 'upcoming a'), ['4']);
+test('Sports games: game_id merges; a null game_id joins the only game with the same league, teams and start', async () => {
+  const games = sportsSql(SPORTS_GAMES);
+  const { rows } = await pool.query(games, [null, '', null, null, null]);
+  // g2 and g1 in play; 02:00 games g3, g4 and the ambiguous 7 alone; g6 (rep 30); 9; no start 8; ended 10.
+  assert.deepEqual(rows.map((row) => row.event_id), ['4', '20', '5', '6', '7', '30', '9', '8', '10']);
+  const g1 = rows[1];
+  assert.deepEqual(g1.events.map((e) => e.event_id), ['1', '20', '21', '22'], 'Total Corners (no game_id, teams swapped) joins g1');
+  assert.deepEqual([g1.title, g1.score, g1.live, g1.market_count], ['Heat vs. Hornets', '78-71', true, 4], 'representative has the open moneyline');
+  assert.deepEqual(g1.teams, [{ name: 'Heat', abbreviation: 'mia', alias: null }, { name: 'Hornets', abbreviation: 'cha', alias: 'Charlotte' }]);
+  assert.deepEqual(rows[4].events.map((e) => e.event_id), ['7'], 'matches g3 and g4: a game by itself');
+  assert.deepEqual(rows[5].events.map((e) => e.event_id), ['30', '100'], 'no moneyline: smallest id by number, not text');
+  assert.equal(rows[2].title, 'Leafs vs. Habs', 'a closed moneyline does not make a representative');
+  assert.equal(rows[2].start_key, '2026-10-22T02:00:00.000000Z');
+  // Paging is by game: after a game, the next page starts at the following game.
+  const after = async (row) => (await pool.query(games, [null, '', row.status_rank, row.start_key, row.event_id])).rows.map((r) => r.event_id);
+  assert.deepEqual(await after(rows[0]), ['20', '5', '6', '7', '30', '9', '8', '10']);
+  assert.deepEqual(await after(rows[2]), ['6', '7', '30', '9', '8', '10']);
+  assert.deepEqual(await after(rows[7]), ['10']);
+  assert.deepEqual(await after(rows[8]), []);
+  const ids = async (leagues, q) => (await pool.query(games, [leagues, q, null, null, null])).rows.map((r) => r.event_id);
+  assert.deepEqual(await ids(['nba'], ''), ['4', '20', '10']);
+  assert.deepEqual(await ids([''], ''), ['9']);
+  assert.deepEqual(await ids(null, 'total corners'), ['20', '7'], 'search any event title of the game');
+  assert.deepEqual(await ids(null, 'canadiens'), ['5', '6', '7'], 'search team names');
+  // League counts are games, by the representative's league.
   assert.deepEqual((await pool.query(sportsSql(SPORTS_LEAGUES))).rows.map((r) => [r.code, r.name, r.count]),
-    [['nba', 'NBA', 3], ['nhl', 'NHL', 3], ['epl', 'Premier League', 1], [null, null, 1]]);
-  assert.equal((await pool.query(sportsSql(SPORTS_EVENT), ['8'])).rows.length, 0);
-  assert.equal((await pool.query(sportsSql(SPORTS_EVENT), ['1'])).rows[0].title, 'Live late');
+    [['nhl', 'NHL', 4], ['nba', 'NBA', 3], ['epl', 'Premier League', 1], [null, null, 1]]);
+  // Detail: any event of the game opens the whole game.
+  const detail = async (id) => (await pool.query(sportsSql(SPORTS_GAME_DETAIL), [id])).rows;
+  assert.deepEqual((await detail('22')).map((r) => [r.event_id, r.events.length]), [['20', 4]]);
+  assert.deepEqual((await detail('7')).map((r) => [r.event_id, r.events.length]), [['7', 1]]);
+  assert.equal((await detail('11')).length, 0, 'three teams is not a game');
+  assert.equal((await detail('12')).length, 0, 'closed is not open');
 });
 test('Sports buy prices are numeric: first outcome best_ask, second 1 − first best_bid; null stays null', async () => {
   const query = `WITH test_markets(event_id,market_id,sports_market_type,sort_order,group_title,question,line,liquidity,in_current_scan,active,closed,archived) AS (VALUES

@@ -11,7 +11,15 @@ import { liveMatch, liveEvent, type LiveEvent, type LiveOutcome } from '../src/l
 import { cents, chance, multiplier } from '../src/lib/format';
 import { CUSTOMER_PLAN, EVENTS } from '../src/data/catalog';
 import { DEMO_ACCOUNT, EMPTY_ACCOUNT, type Account } from '../src/data/terminal';
-import { INITIAL_WORKSPACE, deriveWorkspace, focusHighlight, sideLabel, type WorkspaceState } from '../src/lib/markets';
+import {
+  INITIAL_WORKSPACE,
+  deriveWorkspace,
+  focusHighlight,
+  focusPrediction,
+  sideLabel,
+  signalCovers,
+  type WorkspaceState,
+} from '../src/lib/markets';
 import {
   accountSummary,
   currentPrice,
@@ -22,22 +30,29 @@ import {
   shortAddress,
 } from '../src/lib/terminal';
 import { TradingTerminal } from '../src/components/terminal/TradingTerminal';
-import { DEMO_GAMES } from '../src/data/sports';
+import { SportsList } from '../src/components/sports/SportsList';
 import {
+  DEMO_GAMES,
   SPORT_LEAGUES,
   americanOdds,
   compareGames,
+  compareIds,
   decimalOdds,
   filterFromId,
   filterLeagues,
   leagueCounts,
   liveSportsGame,
   mainLine,
+  matchesQuery,
+  mergeGames,
   moneylines,
   odds,
+  otherByEvent,
   sportOf,
   sportsCategories,
-  type LiveSportsEvent,
+  threeWay,
+  type LiveSportsGame,
+  type SportsEvent,
   type SportsGame,
   type SportsMarket,
 } from '../src/lib/sports';
@@ -296,7 +311,7 @@ test('Moneyline label may be either team name or alias; anything else uses gener
 const position = (id: string) => DEMO_ACCOUNT.positions.find((p) => p.id === id)!;
 test('Terminal summary: equity = cash + position values, available = cash − open buy orders, P/L summed', () => {
   assert.equal(reservedCash(DEMO_ACCOUNT.orders), 220); // 0.54×200 + 0.82×100 + 0.15×200; the sell holds no cash
-  assert.deepEqual(accountSummary(DEMO_ACCOUNT), { balance: 986.5, equity: 1903.3, available: 766.5, unrealized: 53.3 });
+  assert.deepEqual(accountSummary(DEMO_ACCOUNT), { balance: 920.5, equity: 1891.3, available: 700.5, unrealized: 41.3 });
   const rows = DEMO_ACCOUNT.positions.map((p) => positionRow(p));
   assert.deepEqual(
     rows.map((r) => [r.position.id, r.value, r.pnl!.amount, r.pnl!.percent]),
@@ -308,6 +323,7 @@ test('Terminal summary: equity = cash + position values, available = cash − op
       ['p5', 150, 13.5, 9.89],
       ['p6', 76, -14, -15.56],
       ['p7', 52.8, -7.2, -12],
+      ['p8', 54, -12, -18.18],
     ],
   );
   assert.deepEqual(rows.filter((r) => r.redeemable).map((r) => r.position.id), ['p5']);
@@ -328,11 +344,13 @@ test('Terminal value and P/L follow price; a missing price stays unknown; an emp
   }
 });
 test('Demo account is consistent: Demo events, screen prices, enough rows, cash equals the ledger', () => {
-  // Signal's Trending lists every event that the Signal page can open.
-  const ids = new Set(deriveWorkspace('signal', INITIAL_WORKSPACE, CUSTOMER_PLAN, en).events.map((e) => e.id));
+  const ids = new Set(EVENTS.map((e) => e.id));
   for (const item of [...DEMO_ACCOUNT.positions, ...DEMO_ACCOUNT.orders, ...DEMO_ACCOUNT.trades.filter((x) => x.eventId)]) {
-    assert.ok(ids.has(item.eventId!), `${item.id} uses a Signal event`);
+    assert.ok(ids.has(item.eventId!), `${item.id} uses a Demo event`);
   }
+  // Both kinds of position: on an event Signal lists, and on one LAC does not cover.
+  const covered = DEMO_ACCOUNT.positions.map((p) => signalCovers(p.eventId, CUSTOMER_PLAN));
+  assert.ok(covered.includes(true) && covered.includes(false));
   for (const p of DEMO_ACCOUNT.positions.filter((x) => x.settledPrice === undefined)) {
     const event = EVENTS.find((e) => e.id === p.eventId)!;
     const outcome = event.rows.find((r) => r.id === p.outcomeId)!;
@@ -347,9 +365,10 @@ test('Demo account is consistent: Demo events, screen prices, enough rows, cash 
   const times = DEMO_ACCOUNT.trades.map((x) => Date.parse(x.at));
   assert.deepEqual(times, [...times].sort((a, b) => b - a), 'trades are newest first');
 });
-test('Clicking a position opens its event in the Signal columns and marks that outcome and side', () => {
+test('Clicking a position: with LAC signals it opens in the Signal columns, without them on Prediction; both mark the cell', () => {
   const open = (state: WorkspaceState) => deriveWorkspace('signal', state, CUSTOMER_PLAN, en);
-  for (const p of DEMO_ACCOUNT.positions) {
+  const predict = (state: WorkspaceState) => deriveWorkspace('prediction', state, CUSTOMER_PLAN, en);
+  for (const p of DEMO_ACCOUNT.positions.filter((x) => signalCovers(x.eventId, CUSTOMER_PLAN))) {
     for (const start of ['trending', 'weather', 'sport'] as const) {
       const before: WorkspaceState = { ...INITIAL_WORKSPACE, signalCategory: start };
       const after = open({ ...before, ...focusHighlight(open(before), p) });
@@ -358,6 +377,21 @@ test('Clicking a position opens its event in the Signal columns and marks that o
       assert.deepEqual([after.highlight!.id, after.highlight!.outcomeId, after.highlight!.side], [p.id, p.outcomeId, p.side]);
     }
   }
+  // The US shutdown position has no LAC signal: Signal can't list it, so it opens on Prediction.
+  const shutdown = position('p8');
+  assert.equal(signalCovers(shutdown.eventId, CUSTOMER_PLAN), false);
+  assert.ok(!open(INITIAL_WORKSPACE).events.some((e) => e.id === shutdown.eventId));
+  for (const start of ['trending', 'finance', 'politics'] as const) {
+    const before: WorkspaceState = { ...INITIAL_WORKSPACE, predictionCategory: start, highlightId: 's1' };
+    const after = predict({ ...before, ...focusPrediction(before, shutdown) });
+    assert.equal(after.selected!.id, 'shutdown');
+    assert.equal(after.activeCategory, 'politics', 'the event is not trending, so its own category lists it');
+    assert.ok(after.events.some((e) => e.id === 'shutdown'));
+    assert.deepEqual([after.highlight!.id, after.highlight!.outcomeId, after.highlight!.side], ['p8', 'yn', 'yes']);
+  }
+  // Prediction marks only terminal positions, and only on the selected event.
+  assert.equal(predict({ ...INITIAL_WORKSPACE, highlightId: 's1', predictionEventId: 'london' }).highlight, null);
+  assert.equal(predict({ ...INITIAL_WORKSPACE, highlightId: 'p8', predictionEventId: 'fed' }).highlight, null);
   // The category stays when it lists the event, otherwise Trending.
   const weather = open({ ...INITIAL_WORKSPACE, signalCategory: 'weather' });
   assert.equal(focusHighlight(weather, position('p1')).signalCategory, 'weather');
@@ -371,8 +405,8 @@ test('Clicking a position opens its event in the Signal columns and marks that o
 });
 
 // Sports page.
-const line = (id: string, type: string, liquidity: number | null, sortOrder: number): SportsMarket => ({
-  id, type, sortOrder, title: id, line: null, liquidity, outcomes: [],
+const line = (id: string, type: string, liquidity: number | null, sortOrder: number, eventId = 'e'): SportsMarket => ({
+  id, eventId, type, sortOrder, title: id, line: null, liquidity, outcomes: [],
 });
 test('Odds: decimal = 1 ÷ buy price, American by side of 0.5, null shows a dash', () => {
   assert.deepEqual([decimalOdds(0.62), americanOdds(0.62)], ['1.61', '-163']);
@@ -386,23 +420,122 @@ test('Odds: decimal = 1 ÷ buy price, American by side of 0.5, null shows a dash
   assert.equal(odds(null, 'american'), '—');
   assert.equal(odds(0.62, 'american'), '-163');
 });
-test('Second outcome buy price arrives from the reader and maps per outcome in index order', () => {
-  const event: LiveSportsEvent = {
+test('Second outcome buy price arrives from the reader and maps per outcome in index order, for every event of the game', () => {
+  const game: LiveSportsGame = {
     event_id: '9', title: 'A vs. B', league_code: 'nba', league_name: 'NBA', teams: [{ name: 'A', abbreviation: 'a' }, { name: 'B', abbreviation: 'b' }],
-    score: null, live: null, ended: null, period: null, elapsed: null, game_start_at: '2026-10-25T00:00:00.000Z', market_count: 1,
+    score: null, live: null, ended: null, period: null, elapsed: null, game_start_at: '2026-10-25T00:00:00.000Z',
+    events: [{ event_id: '9', title: 'A vs. B' }, { event_id: '10', title: 'A vs. B - More Markets' }], market_count: 2,
   };
   const row = { event_id: '9', market_id: '1', sports_market_type: 'moneyline', sort_order: 0, group_title: '', question: 'A vs. B', line: null, liquidity: '10' };
   // Reader rows for best_bid 0.61 / best_ask 0.62: outcome 0 buys at 0.62, outcome 1 at 1 − 0.61.
-  const game = liveSportsGame(event, [
+  const mapped = liveSportsGame(game, [
     { ...row, outcome_index: 1, label: 'B', buy: '0.39' },
     { ...row, outcome_index: 0, label: 'A', buy: '0.62' },
-    { ...row, event_id: '8', outcome_index: 0, label: 'X', buy: '0.5' },
+    { ...row, event_id: '10', market_id: '2', sports_market_type: 'totals', group_title: 'O/U 9.5', outcome_index: 0, label: 'Over', buy: '0.5' },
+    { ...row, event_id: '8', market_id: '3', outcome_index: 0, label: 'X', buy: '0.5' },
   ]);
-  assert.equal(game.markets.length, 1);
-  assert.equal(game.markets[0].title, 'A vs. B', 'empty group_title falls back to the question');
-  assert.deepEqual(game.markets[0].outcomes, [{ index: 0, label: 'A', buy: 0.62 }, { index: 1, label: 'B', buy: 0.39 }]);
-  assert.deepEqual(game.markets[0].outcomes.map((o) => odds(o.buy, 'decimal')), ['1.61', '2.56']);
-  assert.equal(liveSportsGame(event, [{ ...row, outcome_index: 1, label: 'B', buy: null }]).markets[0].outcomes[0].buy, null);
+  assert.deepEqual(mapped.markets.map((m) => [m.id, m.eventId]), [['1', '9'], ['2', '10']], 'rows of other games are skipped');
+  assert.deepEqual(mapped.events, [{ id: '9', title: 'A vs. B' }, { id: '10', title: 'A vs. B - More Markets' }]);
+  assert.equal(mapped.markets[0].title, 'A vs. B', 'empty group_title falls back to the question');
+  assert.deepEqual(mapped.markets[0].outcomes, [{ index: 0, label: 'A', buy: 0.62 }, { index: 1, label: 'B', buy: 0.39 }]);
+  assert.deepEqual(mapped.markets[0].outcomes.map((o) => odds(o.buy, 'decimal')), ['1.61', '2.56']);
+  assert.equal(liveSportsGame(game, [{ ...row, outcome_index: 1, label: 'B', buy: null }]).markets[0].outcomes[0].buy, null);
+});
+
+// Sports games: events merged by game_id, then null game_id by league + team names + start time.
+const sportsEvent = (id: string, gameId: string | null, overrides: Partial<SportsEvent> = {}): SportsEvent => ({
+  id, gameId, title: `Alpha vs. Beta${id.includes('-') ? ` - ${id.split('-')[1]}` : ''}`,
+  league: { code: 'epl', name: 'Premier League' },
+  teams: [{ name: 'Alpha', abbreviation: 'alp' }, { name: 'Beta', abbreviation: 'bet' }],
+  score: null, live: null, ended: null, period: null, elapsed: null, startAt: '2026-10-22T19:00:00Z', markets: [], ...overrides,
+});
+test('Games: same game_id is one game; a null game_id joins the only matching game, else stands alone', () => {
+  const swapped = [{ name: 'Beta', abbreviation: 'bet' }, { name: 'Alpha', abbreviation: 'alp' }];
+  const games = mergeGames([
+    sportsEvent('100', 'g1'),
+    sportsEvent('101-More Markets', 'g1'),
+    sportsEvent('102-Total Corners', null, { teams: swapped }), // team order does not matter
+    sportsEvent('200', 'g2', { teams: [{ name: 'Gamma', abbreviation: 'gam' }, { name: 'Delta', abbreviation: 'del' }] }),
+    sportsEvent('201', 'g3', { teams: [{ name: 'Gamma', abbreviation: 'gam' }, { name: 'Delta', abbreviation: 'del' }] }),
+    sportsEvent('202-Total Corners', null, { teams: [{ name: 'Gamma', abbreviation: 'gam' }, { name: 'Delta', abbreviation: 'del' }] }),
+    sportsEvent('300-Total Corners', null, { startAt: '2026-10-23T19:00:00Z' }), // different start: no game
+    sportsEvent('301-Total Corners', null, { league: { code: 'efa', name: 'FA Cup' } }), // different league: no game
+    sportsEvent('302', null), // fields match g1 (titles are never compared): joins
+    sportsEvent('400', null, { teams: [{ name: 'Eta', abbreviation: 'eta' }, { name: 'Theta', abbreviation: 'the' }] }),
+    sportsEvent('401-Total Corners', null, { teams: [{ name: 'Eta', abbreviation: 'eta' }, { name: 'Theta', abbreviation: 'the' }] }),
+  ]);
+  const members = (id: string) => games.find((g) => g.events.some((e) => e.id === id))!.events.map((e) => e.id);
+  assert.deepEqual(members('100'), ['100', '302', '101-More Markets', '102-Total Corners']);
+  assert.deepEqual(members('202-Total Corners'), ['202-Total Corners'], 'two matching games: not joined');
+  assert.deepEqual(members('300-Total Corners'), ['300-Total Corners']);
+  assert.deepEqual(members('301-Total Corners'), ['301-Total Corners']);
+  assert.deepEqual(members('400'), ['400'], 'null events only join a game_id game, never each other');
+  assert.deepEqual(members('401-Total Corners'), ['401-Total Corners']);
+  assert.equal(games.length, 8, 'g1 (4 events), g2, g3, and five games of one event');
+  assert.deepEqual(leagueCounts(games), [{ code: 'epl', name: 'Premier League', count: 7 }, { code: 'efa', name: 'FA Cup', count: 1 }]);
+});
+test('Games: representative is the event with a moneyline, else the smallest id; lines come from every event', () => {
+  const ml = { ...line('ml', 'moneyline', 10, 0, '1000'), outcomes: [] };
+  const games = mergeGames([
+    sportsEvent('999', 'g', { title: 'Alpha vs. Beta - Exact Margin', live: false, markets: [line('t-small', 'totals', 5, 0, '999')] }),
+    sportsEvent('1000', 'g', { title: 'Alpha vs. Beta', live: true, score: '1-0', markets: [ml] }),
+    sportsEvent('1001', 'g', { title: 'Alpha vs. Beta - More Markets', markets: [line('s', 'spreads', 7, 0, '1001'), line('t-big', 'totals', 50, 1, '1001')] }),
+  ]);
+  assert.equal(games.length, 1);
+  const [game] = games;
+  assert.deepEqual([game.id, game.title, game.live, game.score], ['1000', 'Alpha vs. Beta', true, '1-0']);
+  assert.deepEqual(game.events.map((e) => e.id), ['999', '1000', '1001'], 'ids compare as numbers');
+  assert.equal(game.marketCount, 4);
+  assert.equal(mainLine(game.markets, 'totals')!.id, 't-big', 'main total across events');
+  assert.equal(mainLine(game.markets, 'spreads')!.id, 's');
+  assert.ok(matchesQuery(game, 'exact margin') && matchesQuery(game, 'beta') && !matchesQuery(game, 'gamma'));
+  const noMoneyline = mergeGames([sportsEvent('20', 'h'), sportsEvent('3', 'h')])[0];
+  assert.equal(noMoneyline.id, '3', 'no moneyline: smallest id (3 < 20)');
+  assert.ok(compareIds('999', '1000') < 0 && compareIds('1000', '1001') < 0);
+  // "Other" markets sit under one heading per event; the representative title prefix is dropped.
+  const other = mergeGames([
+    sportsEvent('1', 'k', { markets: [{ ...ml, eventId: '1' }] }),
+    sportsEvent('2', 'k', { title: 'Alpha vs. Beta - Total Corners', markets: [line('c', 'total_corners', 1, 0, '2')] }),
+  ])[0];
+  assert.deepEqual(otherByEvent(other).map((g) => [g.heading, g.markets.map((m) => m.id)]), [['Total Corners', ['c']]]);
+});
+
+// Three Yes/No moneylines: team 1 / draw / team 2.
+const yn = (id: string, title: string, yes: number): SportsMarket => ({
+  id, eventId: 'e', type: 'moneyline', sortOrder: Number(id), title, line: null, liquidity: null,
+  outcomes: [{ index: 0, label: 'Yes', buy: yes }, { index: 1, label: 'No', buy: 1 - yes }],
+});
+test('Three-way: only-team-1 market, draw, only-team-2 market; the draw title may name both teams', () => {
+  const teams = [{ name: 'Stevenage FC', abbreviation: 'ste' }, { name: 'Sheffield Wednesday FC', abbreviation: 'shw' }];
+  const cells = threeWay({ teams, markets: [
+    yn('2', 'Sheffield Wednesday FC', 0.3), yn('1', 'Draw (Stevenage FC vs. Sheffield Wednesday FC)', 0.28), yn('0', 'Stevenage FC', 0.45),
+  ] })!;
+  assert.deepEqual(cells.map((c) => c!.buy), [0.45, 0.28, 0.3]);
+  // Rugby (Top 14): plain "Draw" title.
+  const rugby = threeWay({ teams: [{ name: 'Toulon', abbreviation: 'tln' }, { name: 'Pau', abbreviation: 'pau' }],
+    markets: [yn('0', 'Toulon', 0.71), yn('1', 'Draw', 0.04), yn('2', 'Pau', 0.27)] })!;
+  assert.deepEqual(rugby.map((c) => c!.buy), [0.71, 0.04, 0.27]);
+  // Alias: the market says "Louisiana", the team name is "Ragin' Cajuns".
+  const alias = threeWay({ teams: [{ name: "Ragin' Cajuns", abbreviation: 'ull', alias: 'Louisiana' }, { name: 'Bobcats', abbreviation: 'txst', alias: 'Texas State' }],
+    markets: [yn('0', 'Texas State', 0.5), yn('1', 'Draw', 0.1), yn('2', 'Louisiana', 0.4)] })!;
+  assert.deepEqual(alias.map((c) => c!.buy), [0.4, 0.1, 0.5]);
+});
+test('Three-way: anything but exactly three placed cells shows three dashes; other shapes are not three-way', () => {
+  const teams = [{ name: 'La Rochelle', abbreviation: 'lar' }, { name: 'Union Bordeaux Bègles', abbreviation: 'ubb' }];
+  const dashes = threeWay({ teams, markets: [yn('0', 'La Rochelle', 0.45), yn('1', 'Draw', 0.05), yn('2', 'Union Bordeaux Begles', 0.52)] });
+  assert.deepEqual(dashes, [null, null, null]);
+  assert.deepEqual(threeWay({ teams, markets: [yn('0', 'La Rochelle', 0.4), yn('1', 'La Rochelle win by 7+', 0.2), yn('2', 'Union Bordeaux Bègles', 0.4)] }),
+    [null, null, null], 'two markets name only team 1');
+  assert.equal(threeWay({ teams, markets: [yn('0', 'La Rochelle', 0.4), yn('2', 'Union Bordeaux Bègles', 0.6)] }), null);
+  const teamOutcome: SportsMarket = { ...yn('3', 'La Rochelle', 0.4), outcomes: [{ index: 0, label: 'La Rochelle', buy: 0.4 }, { index: 1, label: 'Draw', buy: 0.6 }] };
+  assert.equal(threeWay({ teams, markets: [teamOutcome, yn('1', 'Draw', 0.05), yn('2', 'Union Bordeaux Bègles', 0.5)] }), null);
+  for (const language of ['en', 'zh-Hant'] as const) {
+    const game = DEMO_GAMES.find((g) => g.id === 'sp-rug-2')!;
+    const html = renderToStaticMarkup(createElement(I18nProvider, { language, children: createElement(SportsList, {
+      title: 't', games: [game], emptyText: '', selectedId: null, format: 'decimal', onSelect: () => {} }) }));
+    assert.ok(html.includes('LAR') && html.includes('UBB') && html.includes(language === 'en' ? 'Draw' : '和'));
+    assert.equal(html.split('>—<').length - 1 >= 3, true, 'three dashes');
+  }
 });
 test('Spreads and totals list the most liquid line, then sort_order; moneylines keep Polymarket order', () => {
   const markets = [
@@ -452,8 +585,14 @@ test('Games sort in play first, then by start time (unknown last), ended last', 
   ];
   assert.deepEqual([...games].sort(compareGames).map((x) => x.id), ['4', '6', '3', '5', '7', '8', '9']);
 });
-test('Demo Sports data: three or more leagues, ten or more games, every state, some lines missing', () => {
+test('Demo Sports data: three or more leagues, ten or more games, every state, some lines missing, merged sub-events', () => {
   assert.ok(leagueCounts(DEMO_GAMES).length >= 3 && DEMO_GAMES.length >= 10);
+  assert.ok(DEMO_GAMES.filter((x) => x.events.length > 1).length >= 2, 'games with sub-events');
+  const arsenal = DEMO_GAMES.find((x) => x.id === 'sp-epl-1')!;
+  assert.deepEqual(arsenal.events.map((e) => e.id), ['sp-epl-1', 'sp-epl-1-mm', 'sp-epl-1-tc'], 'Total Corners joins without game_id');
+  assert.deepEqual(threeWay(arsenal)!.map((c) => c!.buy), [0.55, 0.24, 0.23]);
+  assert.equal(mainLine(arsenal.markets, 'spreads')!.eventId, 'sp-epl-1-mm');
+  assert.ok(DEMO_GAMES.find((x) => x.id === 'sp-cs2-1')!.events.length === 1, 'no game_id, no match: alone');
   assert.ok(DEMO_GAMES.some((x) => x.live === true) && DEMO_GAMES.some((x) => x.ended === true));
   assert.ok(DEMO_GAMES.some((x) => x.live !== true && x.ended !== true));
   assert.ok(DEMO_GAMES.some((x) => !mainLine(x.markets, 'spreads')) && DEMO_GAMES.some((x) => !mainLine(x.markets, 'totals')));

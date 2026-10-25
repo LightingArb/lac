@@ -269,6 +269,8 @@ export const zh: Messages = {
     american: '美國盤',
     buy: (price) => `買進 ${price}`,
     marketCount: (n) => `${n} 個市場`,
+    eventCount: (n) => `${n} 個議題`,
+    draw: '和',
     pickGame: '選一場比賽，就會顯示它的全部市場。',
     noGames: '沒有符合的賽事。',
     loading: '載入 Live 賽事中…',

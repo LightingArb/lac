@@ -154,6 +154,9 @@ export function deriveWorkspace(
     const events = searching
       ? EVENTS.filter(matches)
       : EVENTS.filter((e) => (active === 'trending' ? e.trending : e.cat === active));
+    const selected = EVENTS_BY_ID[state.predictionEventId] ?? EVENTS[0];
+    // Prediction has no signals; only a terminal position opened from Signal is marked here.
+    const position = DEMO_ACCOUNT.positions.find((p) => p.id === state.highlightId) ?? null;
     return {
       ...shared,
       categories,
@@ -161,8 +164,8 @@ export function deriveWorkspace(
       categoryLabel: t.categories[active],
       events,
       emptyText: t.markets.noMatch,
-      selected: EVENTS_BY_ID[state.predictionEventId] ?? EVENTS[0],
-      highlight: null,
+      selected,
+      highlight: position && position.eventId === selected.id ? position : null,
     };
   }
 
@@ -199,6 +202,28 @@ export function deriveWorkspace(
     emptyText: visibleProducts.length ? t.markets.noMatch : t.markets.noPlan,
     selected,
     highlight: picked && selected && picked.eventId === selected.id ? picked : null,
+  };
+}
+
+/** Signal lists an event when LAC covers it and its product has signals in the customer's plan right now. */
+export function signalCovers(eventId: string, plan: Record<ProductId, boolean>): boolean {
+  const product = EVENTS_BY_ID[eventId]?.lac?.product;
+  return !!product && plan[product] && priceSignals(plan).some((s) => s.product === product);
+}
+
+/**
+ * A terminal position whose event Signal can't list opens on the Prediction page instead, with the same
+ * Yes/No button marked. The category stays when it lists the event; otherwise the event's own category.
+ */
+export function focusPrediction(state: WorkspaceState, cell: Highlight): Partial<WorkspaceState> {
+  const event = EVENTS_BY_ID[cell.eventId];
+  const active = state.predictionCategory;
+  const listed = active === 'trending' ? event.trending : active === event.cat;
+  return {
+    predictionEventId: cell.eventId,
+    highlightId: cell.id,
+    predictionCategory: listed ? active : (event.cat ?? 'trending'),
+    query: '',
   };
 }
 

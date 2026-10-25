@@ -1,8 +1,8 @@
 import type { Side } from './catalog';
 
-// Demo trading account shown in the Signal page's terminal column. Every position, order
-// and trade points at a Demo event in catalog.ts that the Signal page lists (its product has
-// signals), so a click can open it; current prices come from that event.
+// Demo trading account shown in the Signal page's terminal column. Every position, order and
+// trade points at a Demo event in catalog.ts; current prices come from that event. A click on a
+// position opens it on Signal when Signal lists the event (it has LAC signals), else on Prediction.
 
 export interface Position {
   id: string;
@@ -58,7 +58,7 @@ export interface Account {
 
 export const DEMO_ACCOUNT: Account = {
   address: '0x12ab7c4e9f0d3b8a61e5c2f47d90b3a6e18f89cd',
-  cash: 986.5,
+  cash: 920.5,
   positions: [
     { id: 'p1', eventId: 'london', outcomeId: 'c17', side: 'yes', shares: 500, avgCost: 0.36 },
     { id: 'p2', eventId: 'nyc', outcomeId: 'f66', side: 'yes', shares: 300, avgCost: 0.25 },
@@ -67,6 +67,8 @@ export const DEMO_ACCOUNT: Account = {
     { id: 'p5', eventId: 'london', outcomeId: 'c14', side: 'no', shares: 150, avgCost: 0.91, settledPrice: 1 },
     { id: 'p6', eventId: 'btc', outcomeId: 'ud', side: 'yes', shares: 200, avgCost: 0.45 },
     { id: 'p7', eventId: 'eth', outcomeId: 'ud', side: 'no', shares: 120, avgCost: 0.5 },
+    // LAC has no signal on this event, so a click opens it on the Prediction page.
+    { id: 'p8', eventId: 'shutdown', outcomeId: 'yn', side: 'yes', shares: 300, avgCost: 0.22 },
   ],
   orders: [
     {
@@ -216,6 +218,17 @@ export const DEMO_ACCOUNT: Account = {
       amount: -138,
     },
     { id: 't5', at: 'Oct 20, 2026 08:30', kind: 'deposit', amount: 1000 },
+    {
+      id: 't16',
+      at: 'Oct 19, 2026 16:40',
+      kind: 'buy',
+      eventId: 'shutdown',
+      outcomeId: 'yn',
+      side: 'yes',
+      price: 0.22,
+      shares: 300,
+      amount: -66,
+    },
     {
       id: 't4',
       at: 'Oct 19, 2026 14:02',

@@ -74,3 +74,34 @@ export function Teams({ game }: { game: SportsGame }) {
     </span>
   );
 }
+
+/**
+ * Three Yes/No moneylines in one row: team 1 / draw / team 2, labelled by the teams' abbreviations in
+ * `teams` order (no home/away), each cell the market's Yes odds; "—" when the markets can't be placed.
+ */
+export function ThreeCells({
+  game,
+  cells,
+  format,
+  size = 'sm',
+}: {
+  game: Pick<SportsGame, 'teams'>;
+  cells: (SportsOutcome | null)[];
+  format: OddsFormat;
+  size?: 'sm' | 'md';
+}) {
+  const t = useT();
+  const labels = [game.teams[0], null, game.teams[1]].map((team) =>
+    team ? (team.abbreviation?.toUpperCase() ?? team.name ?? '—') : t.sports.draw,
+  );
+  return (
+    <span className={cx(styles.three, size === 'md' && styles.threeLarge)}>
+      {cells.map((cell, i) => (
+        <span key={i} className={styles.threeCell}>
+          <span className={styles.threeLabel}>{labels[i]}</span>
+          <span className={styles.threeOdds}>{odds(cell?.buy ?? null, format)}</span>
+        </span>
+      ))}
+    </span>
+  );
+}

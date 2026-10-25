@@ -250,6 +250,8 @@ export const en = {
     american: 'American',
     buy: (price: string) => `Buy ${price}`,
     marketCount: (n: number) => plural(n, 'market', 'markets'),
+    eventCount: (n: number) => plural(n, 'event', 'events'),
+    draw: 'Draw',
     pickGame: 'Pick a game to see its markets.',
     noGames: 'No games match.',
     loading: 'Loading live games…',

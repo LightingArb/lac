@@ -64,6 +64,59 @@
   font-size: 11px;
 }
 
+/* Team 1 / draw / team 2 in one row */
+
+.three {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.threeCell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.threeLabel {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.threeOdds {
+  color: var(--color-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.threeLarge {
+  gap: 8px;
+}
+
+.threeLarge .threeCell {
+  padding: 8px 4px;
+}
+
+.threeLarge .threeLabel {
+  font-size: 12px;
+}
+
+.threeLarge .threeOdds {
+  font-size: 17px;
+}
+
 /* Teams */
 
 .teams {

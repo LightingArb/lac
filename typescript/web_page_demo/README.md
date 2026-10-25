@@ -17,11 +17,11 @@ npm run dev
 
 ```bash
 npm test
-npm run test:db  # 本機 lac_data：唯讀 SELECT，測 SQL numeric、歷史分桶、moneyline 與 Sports 的排序與買進價
+npm run test:db  # 本機 lac_data：唯讀 SELECT，測 SQL numeric、歷史分桶、moneyline，以及 Sports 的合併、排序、以場翻頁與買進價
 npm run build
 ```
 
-- `npm test`：Live 欄位對應、缺值、結果順序、moneyline 對隊名或 alias、交易終端的淨值／可用／現值／損益與點持倉、Sports 的賠率換算／主線／聯賽對照表／排序、分成與推薦碼規則、提領流程、後台產品版本與權益規則、中英文鍵值是否一致。
+- `npm test`：Live 欄位對應、缺值、結果順序、moneyline 對隊名或 alias、交易終端的淨值／可用／現值／損益與點持倉（留在 Signal 或跳到 Prediction）、Sports 的議題合併成場／代表議題／賠率換算／跨議題主線／勝負三格／聯賽對照表／排序、分成與推薦碼規則、提領流程、後台產品版本與權益規則、中英文鍵值是否一致。
 - `npm run build`：TypeScript 檢查與 Vite 靜態輸出，結果在 `dist/`。
 - `npm run build:static`：輸出單一檔案 `dist-static/index.html`（JS、CSS 都包在裡面，路由用 `#/`），不用伺服器就能打開或分享；這個版本只有 Demo。
 - `tests/live_event.json`：以新表讀取程式於 2026-10-25 07:15:34 UTC 從本機 `lac_data` 取得 `/api/live/event?id=878226`（Russia x Ukraine any diplomatic meeting by...?）的實際回應；僅供測試，不代表目前行情。原始回應、查詢與逐點比對在 `/home/admin/research/web/web_page_demo_live/`。
@@ -39,17 +39,17 @@ npm run build
 | [src/components/markets/](src/components/markets/) | 共用 EventCard、EventDetail、PriceChart、MarketsTable                        |
 | [src/components/signals/](src/components/signals/) | Signal 面板與訊號卡                                                          |
 | [src/components/terminal/](src/components/terminal/) | Signal 最右邊的交易終端：錢包列、帳戶摘要、持倉／訂單／交易、鎖住的按鈕    |
-| [src/components/sports/](src/components/sports/)   | Sports 的賽事列表、賽事詳情與賠率格                                          |
+| [src/components/sports/](src/components/sports/)   | Sports 的賽事列表（一場一列）、賽事詳情、賠率格與勝負三格                    |
 | [src/components/ui/](src/components/ui/)           | Button、Drawer、Panel、Switch 等基礎元件                                     |
 | [src/data/](src/data/)                             | Demo fixtures、方案、偏好與分成規則                                          |
 | [src/data/terminal.ts](src/data/terminal.ts)       | 交易終端的 Demo 帳戶：持倉、掛單、交易紀錄（都用 catalog.ts 的議題）         |
-| [src/data/sports.ts](src/data/sports.ts)           | Sports 的 Demo 賽事與每個結果的買進價                                        |
+| [src/data/sports.ts](src/data/sports.ts)           | Sports 的 Demo 議題（含子議題與 `game_id`）與每個結果的買進價                |
 | [src/data/backend.ts](src/data/backend.ts)         | Demo 後端：網站與後台共用的資料與每個員工動作（一個 reducer）                |
 | [src/data/products.ts](src/data/products.ts)       | 產品版本：發布後不改；要加減項目就發下一版，舊版買家照原內容用到期           |
 | [src/data/withdrawals.ts](src/data/withdrawals.ts) | 提領流程：待審核 → 已核准 → 已出款，或駁回；餘額計算                         |
 | [src/lib/markets.ts](src/lib/markets.ts)           | Demo 工作區、分類、搜尋與範例訊號計算；點訊號或持倉時標黃的那一格            |
 | [src/lib/terminal.ts](src/lib/terminal.ts)         | 交易終端的計算（純函式）：現值、損益、損益百分比、掛單佔用、淨值、可用         |
-| [src/lib/sports.ts](src/lib/sports.ts)             | Sports：聯賽 → 運動對照表、賠率換算、主線、排序、分類，以及 Demo／Live 的讀取 |
+| [src/lib/sports.ts](src/lib/sports.ts)             | Sports：聯賽 → 運動對照表、議題合併成場、代表議題、賠率換算、主線、勝負三格、排序、分類，以及 Demo／Live 的讀取 |
 | [src/lib/live.ts](src/lib/live.ts)                 | Live 資料讀取、分頁、刷新與共用模型對應                                      |
 | [src/styles/tokens.css](src/styles/tokens.css)     | 顏色、圓角、陰影等設計 token                                                 |
 | [server/live.ts](server/live.ts)                   | Vite 的唯讀 PostgreSQL middleware（Prediction 與 Sports 的 `/api/live/*`）    |
@@ -61,7 +61,7 @@ npm run build
 - 視窗寬度低於 1600px：Signal 的交易終端改為抽屜，由上方列的「終端」按鈕打開（1600px 時選單 232＋訊號 330＋終端 340，中間還有約 700px 讓列表與詳情並排）。
 - 主內容區低於 640px：議題列表與詳情上下排列（Sports 也一樣）。
 - Sports 的賽事列表本身低於 760px：每場的勝負、讓分、大小分移到隊名下面一排。
-- 點議題會帶到詳情；點訊號或交易終端的持倉會帶到指定市場列，並將對應的 Yes／No 按鈕與該列標黃。
+- 點議題會帶到詳情；點訊號或交易終端的持倉會帶到指定市場列，並將對應的 Yes／No 按鈕與該列標黃（持倉的議題沒有 LAC 訊號時，改跳到 Prediction 標黃）。
 - 後台在視窗寬度低於 768px 時，左側選單改成頂部橫列。
 
 ## 呈現規則

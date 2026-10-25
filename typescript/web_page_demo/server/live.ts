@@ -34,20 +34,81 @@ LEFT JOIN m_live.m02_clob_price AS p ON m.market_id = p.market_id
 ORDER BY m.event_id, o.outcome_index
 `;
 
-// Sports page: open events with exactly two teams; the league is the event's sport.sport.
+// Sports page: open events with exactly two teams, merged into games; the league is the event's sport.sport.
 const TWO_TEAMS = 'JSONB_ARRAY_LENGTH(e.teams) = 2';
 
-export const SPORTS_LEAGUES = `
+// Events → games (README §4). The same game_id is one game. An event without game_id joins the one
+// game_id game with the same league code, the same two team names in any order and the same
+// game_start_at on any of its events; with none or several it is a game by itself. No titles.
+// The representative event (time, teams, score, status, title) has an open moneyline, else the smallest id.
+const SPORTS_GROUPS = `
+WITH two AS MATERIALIZED (
+    SELECT
+        e.event_id,
+        e.game_id,
+        e.title,
+        e.game_start_at,
+        COALESCE(e.sport ->> 'sport', '') AS league,
+        LEAST(e.teams -> 0 ->> 'name', e.teams -> 1 ->> 'name') AS name_lo,
+        GREATEST(e.teams -> 0 ->> 'name', e.teams -> 1 ->> 'name') AS name_hi,
+        (e.teams -> 0 ->> 'name') IS NOT NULL AND (e.teams -> 1 ->> 'name') IS NOT NULL AS named,
+        EXISTS(
+            SELECT 1 FROM m_live.m01_market AS m
+            WHERE
+                m.event_id = e.event_id AND m.sports_market_type = 'moneyline'
+                AND ${MARKET_OPEN}
+        ) AS has_moneyline
+    FROM m_live.m01_event AS e
+    WHERE ${OPEN} AND ${TWO_TEAMS}
+),
+
+attached AS (
+    SELECT
+        n.event_id,
+        MIN(g.game_id) AS game_id
+    FROM two AS n
+    INNER JOIN two AS g
+        ON
+            n.league = g.league AND n.name_lo = g.name_lo AND n.name_hi = g.name_hi
+            AND n.game_start_at = g.game_start_at
+    WHERE n.game_id IS NULL AND n.named AND g.game_id IS NOT NULL AND g.named
+    GROUP BY n.event_id
+    HAVING COUNT(DISTINCT g.game_id) = 1
+),
+
+members AS MATERIALIZED (
+    SELECT
+        t.event_id,
+        t.title,
+        t.name_lo,
+        t.name_hi,
+        t.has_moneyline,
+        COALESCE('g:' || COALESCE(t.game_id, a.game_id), 'e:' || t.event_id) AS game_key
+    FROM two AS t
+    LEFT JOIN attached AS a ON t.event_id = a.event_id
+),
+
+games AS MATERIALIZED (
+    SELECT DISTINCT ON (mb.game_key)
+        mb.game_key,
+        mb.event_id
+    FROM members AS mb
+    ORDER BY mb.game_key ASC, mb.has_moneyline DESC, LENGTH(mb.event_id) ASC, mb.event_id ASC
+)`;
+
+export const SPORTS_LEAGUES = `${SPORTS_GROUPS}
+
 SELECT
     COUNT(*)::int AS count,
     e.sport ->> 'sport' AS code,
     MIN(e.sport ->> 'name') AS name
-FROM m_live.m01_event AS e
-WHERE ${OPEN} AND ${TWO_TEAMS}
+FROM games AS g
+INNER JOIN m_live.m01_event AS e ON g.event_id = e.event_id
 GROUP BY e.sport ->> 'sport'
 ORDER BY count DESC, code ASC NULLS LAST
 `;
 
+// One game: the representative event's fields (alias e), every event of the game and their open markets.
 const SPORTS_GAME = `e.event_id,
     e.title,
     e.score,
@@ -62,66 +123,97 @@ const SPORTS_GAME = `e.event_id,
         SELECT
             JSONB_AGG(
                 JSONB_BUILD_OBJECT(
-                    'name', t.team ->> 'name', 'abbreviation', t.team ->> 'abbreviation'
+                    'name', t.team ->> 'name', 'abbreviation', t.team ->> 'abbreviation', 'alias', t.team ->> 'alias'
                 ) ORDER BY t.i
             )
         FROM JSONB_ARRAY_ELEMENTS(e.teams) WITH ORDINALITY AS t (team, i)
     ) AS teams,
     (
-        SELECT COUNT(*)::int FROM m_live.m01_market AS m
-        WHERE m.event_id = e.event_id AND ${MARKET_OPEN}
+        SELECT
+            JSONB_AGG(
+                JSONB_BUILD_OBJECT('event_id', mb.event_id, 'title', mb.title)
+                ORDER BY LENGTH(mb.event_id), mb.event_id
+            )
+        FROM members AS mb
+        WHERE mb.game_key = g.game_key
+    ) AS events,
+    (
+        SELECT COUNT(*)::int FROM members AS mb
+        INNER JOIN m_live.m01_market AS m ON mb.event_id = m.event_id
+        WHERE mb.game_key = g.game_key AND ${MARKET_OPEN}
     ) AS market_count`;
 
-// In play first, then not started by start time (unknown last), ended last; keyset on (rank, start, event_id).
-export const SPORTS_EVENTS = `
-WITH games AS MATERIALIZED (
+// In play first, then not started by start time (unknown last), ended last, from the representative
+// event; keyset on (rank, start, representative event_id). Search: any event title or either team name.
+export const SPORTS_GAMES = `${SPORTS_GROUPS},
+
+searched AS (
+    SELECT DISTINCT mb.game_key
+    FROM members AS mb
+    WHERE
+        $2 <> '' AND (
+            mb.title ILIKE '%' || $2 || '%' OR mb.name_lo ILIKE '%' || $2 || '%' OR mb.name_hi ILIKE '%' || $2 || '%'
+        )
+),
+
+ranked AS MATERIALIZED (
     SELECT
-        e.event_id,
+        g.game_key,
+        g.event_id,
         e.game_start_at,
         CASE WHEN e.live THEN 0 WHEN e.ended THEN 2 ELSE 1 END AS status_rank
-    FROM m_live.m01_event AS e
+    FROM games AS g
+    INNER JOIN m_live.m01_event AS e ON g.event_id = e.event_id
     WHERE
-        ${OPEN} AND ${TWO_TEAMS}
-        AND ($1::text [] IS NULL OR COALESCE(e.sport ->> 'sport', '') = ANY($1::text []))
-        AND (
-            $2 = '' OR e.title ILIKE '%' || $2 || '%'
-            OR EXISTS (
-                SELECT 1 FROM JSONB_ARRAY_ELEMENTS(e.teams) AS t (team)
-                WHERE t.team ->> 'name' ILIKE '%' || $2 || '%'
+        ($1::text [] IS NULL OR COALESCE(e.sport ->> 'sport', '') = ANY($1::text []))
+        AND ($2 = '' OR g.game_key IN (SELECT s.game_key FROM searched AS s))
+),
+
+page AS (
+    SELECT
+        r.game_key,
+        r.event_id,
+        r.game_start_at,
+        r.status_rank
+    FROM ranked AS r
+    WHERE
+        $3::int IS NULL
+        OR r.status_rank > $3::int
+        OR (
+            r.status_rank = $3::int AND (
+                (
+                    $4::timestamptz IS NOT NULL AND (
+                        r.game_start_at > $4::timestamptz OR r.game_start_at IS NULL
+                        OR (r.game_start_at = $4::timestamptz AND r.event_id > $5)
+                    )
+                )
+                OR ($4::timestamptz IS NULL AND r.game_start_at IS NULL AND r.event_id > $5)
             )
         )
+    ORDER BY r.status_rank ASC, r.game_start_at ASC NULLS LAST, r.event_id ASC LIMIT 51
 )
 
 SELECT
-    g.status_rank,
+    p.status_rank,
     ${SPORTS_GAME},
-    TO_CHAR(g.game_start_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS start_key
-FROM games AS g
-INNER JOIN m_live.m01_event AS e ON g.event_id = e.event_id
-WHERE
-    $3::int IS NULL
-    OR g.status_rank > $3::int
-    OR (
-        g.status_rank = $3::int AND (
-            (
-                $4::timestamptz IS NOT NULL AND (
-                    g.game_start_at > $4::timestamptz OR g.game_start_at IS NULL
-                    OR (g.game_start_at = $4::timestamptz AND g.event_id > $5)
-                )
-            )
-            OR ($4::timestamptz IS NULL AND g.game_start_at IS NULL AND g.event_id > $5)
-        )
-    )
-ORDER BY g.status_rank ASC, g.game_start_at ASC NULLS LAST, g.event_id ASC LIMIT 51
+    TO_CHAR(p.game_start_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS start_key
+FROM page AS p
+INNER JOIN games AS g ON p.game_key = g.game_key
+INNER JOIN m_live.m01_event AS e ON p.event_id = e.event_id
+ORDER BY p.status_rank ASC, p.game_start_at ASC NULLS LAST, p.event_id ASC
 `;
 
-export const SPORTS_EVENT = `
+// The game that event $1 belongs to.
+export const SPORTS_GAME_DETAIL = `${SPORTS_GROUPS}
+
 SELECT
     ${SPORTS_GAME}
-FROM m_live.m01_event AS e
-WHERE
-    ${OPEN} AND ${TWO_TEAMS}
-    AND e.event_id = $1
+FROM games AS g
+INNER JOIN m_live.m01_event AS e ON g.event_id = e.event_id
+WHERE g.game_key = (
+    SELECT mb.game_key FROM members AS mb
+    WHERE mb.event_id = $1
+)
 `;
 
 // Buy price of each outcome: first outcome best_ask, second 1 − first best_bid (numeric, NULL stays NULL).
@@ -563,7 +655,7 @@ ORDER BY m.sort_order, m.market_id, o.outcome_index LIMIT 10001
               endAt: bounds?.end_at ?? null, stepMinutes: bounds?.step_minutes ?? 1 });
           } else if (url.pathname === '/sports/leagues') {
             respond(200, { leagues: (await query(SPORTS_LEAGUES)).rows });
-          } else if (url.pathname === '/sports/events') {
+          } else if (url.pathname === '/sports/games') {
             // An event without a league is ''; no league parameter means every league.
             const leagues = url.searchParams.getAll('league');
             if (leagues.length > 400 || leagues.some((code) => !/^[a-z0-9-]{0,40}$/.test(code))) {
@@ -592,17 +684,17 @@ ORDER BY m.sort_order, m.market_id, o.outcome_index LIMIT 10001
                 return;
               }
             }
-            const result = await query(SPORTS_EVENTS, [
+            const result = await query(SPORTS_GAMES, [
               leagues.length ? leagues : null,
               search,
               cursor?.r ?? null,
               cursor?.t ?? null,
               cursor?.id ?? null,
             ]);
+            // One page is 50 games; markets come from every event of those games.
             const page = result.rows.slice(0, 50);
-            const markets = page.length
-              ? await query(SPORTS_MARKETS, [page.map((event) => event.event_id), LIST_TYPES])
-              : { rows: [] };
+            const eventIds = page.flatMap((game) => game.events.map((event: { event_id: string }) => event.event_id));
+            const markets = page.length ? await query(SPORTS_MARKETS, [eventIds, LIST_TYPES]) : { rows: [] };
             if (markets.rows.length > 20000) {
               respond(503, { error: 'This game page exceeds the display limit' });
               return;
@@ -614,20 +706,21 @@ ORDER BY m.sort_order, m.market_id, o.outcome_index LIMIT 10001
                     'base64url',
                   )
                 : null;
-            const events = page.map(({ status_rank: _rank, start_key: _key, ...event }) => event);
-            respond(200, { events, markets: markets.rows, next });
-          } else if (url.pathname === '/sports/event' && id && /^\d+$/.test(id)) {
-            const event = await query(SPORTS_EVENT, [id]);
-            if (!event.rows.length) {
+            const games = page.map(({ status_rank: _rank, start_key: _key, ...game }) => game);
+            respond(200, { games, markets: markets.rows, next });
+          } else if (url.pathname === '/sports/game' && id && /^\d+$/.test(id)) {
+            const game = await query(SPORTS_GAME_DETAIL, [id]);
+            if (!game.rows.length) {
               respond(404, { error: 'Game is no longer open in the current scan' });
               return;
             }
-            const markets = await query(SPORTS_MARKETS, [[id], null]);
+            const eventIds = game.rows[0].events.map((event: { event_id: string }) => event.event_id);
+            const markets = await query(SPORTS_MARKETS, [eventIds, null]);
             if (markets.rows.length > 20000) {
               respond(503, { error: 'This game exceeds the display limit' });
               return;
             }
-            respond(200, { event: event.rows[0], markets: markets.rows });
+            respond(200, { game: game.rows[0], markets: markets.rows });
           } else respond(404, { error: 'Unknown Live endpoint' });
         } catch (error) {
           console.error('Live reader failed', error instanceof Error ? error.message : 'unknown');

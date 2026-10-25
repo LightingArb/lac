@@ -1,8 +1,8 @@
 import { useEffect, type ReactNode } from 'react';
 import { useT } from '../../i18n';
 import { cx } from '../../lib/cx';
-import { mainLine, moneylines, type OddsFormat, type SportsGame, type SportsMarket } from '../../lib/sports';
-import { GameStatus, OddsChip, Teams, utcTime } from './SportsParts';
+import { mainLine, moneylines, threeWay, type OddsFormat, type SportsGame, type SportsMarket } from '../../lib/sports';
+import { GameStatus, OddsChip, Teams, ThreeCells, utcTime } from './SportsParts';
 import styles from './SportsList.module.css';
 
 interface SportsListProps {
@@ -15,7 +15,7 @@ interface SportsListProps {
   footer?: ReactNode;
 }
 
-/** Left-middle column: one row per game with its moneyline, main spread and main total. */
+/** Left-middle column: one row per game (all its events merged) with its moneyline, main spread and main total. */
 export function SportsList({ title, games, emptyText, selectedId, format, onSelect, footer }: SportsListProps) {
   const t = useT();
   useEffect(() => {
@@ -51,11 +51,11 @@ export function SportsList({ title, games, emptyText, selectedId, format, onSele
             <span>{utcTime(game.startAt, t.locale)}</span>
             <span className={styles.league}>{game.league.name ?? t.sports.unknownLeague}</span>
           </span>
-          {/* Polymarket splits some games into several events (e.g. "… - Total Corners"); the title tells them apart. */}
           <span className={styles.game}>
             <Teams game={game} />
             <span className={styles.gameTitle} title={game.title}>
               {game.title}
+              {game.events.length > 1 && ` · ${t.sports.eventCount(game.events.length)}`}
             </span>
           </span>
           <span className={styles.status}>
@@ -65,7 +65,7 @@ export function SportsList({ title, games, emptyText, selectedId, format, onSele
             )}
           </span>
           <Cell label={t.sports.columns.moneyline}>
-            <Moneyline markets={moneylines(game.markets)} format={format} />
+            <Moneyline game={game} format={format} />
           </Cell>
           <Cell label={t.sports.columns.spreads}>
             <Line market={mainLine(game.markets, 'spreads')} format={format} />
@@ -89,8 +89,14 @@ function Cell({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** One market with team outcomes shows both; several Yes/No markets (1X2) show each market's Yes. */
-function Moneyline({ markets, format }: { markets: SportsMarket[]; format: OddsFormat }) {
+/**
+ * Three Yes/No moneylines: one row of three cells, team 1 / draw / team 2 (all "—" when they can't be placed).
+ * One market with team outcomes: both outcomes. Any other number of markets: each market's Yes.
+ */
+function Moneyline({ game, format }: { game: SportsGame; format: OddsFormat }) {
+  const cells = threeWay(game);
+  if (cells) return <ThreeCells game={game} cells={cells} format={format} />;
+  const markets = moneylines(game.markets);
   if (!markets.length) return <span className={styles.none}>—</span>;
   if (markets.length === 1) {
     return (
