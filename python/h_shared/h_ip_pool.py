@@ -378,7 +378,7 @@ class IPPool:
                     if isinstance(error, ProviderError):
                         raise
                     final = ProviderError(0)
-                    final.logged = True
+                    final.logged, final.context = True, error.context
                     raise final from None
                 failures += 1
                 h_log(self.unit, "request_retry", **self.local.context, attempt=failures, wait=0)
@@ -416,12 +416,14 @@ class IPPool:
                 for future in pending:
                     future.cancel()
 
-    def dispatch(self, take, fetch, until):
-        """Keep every slot busy without rounds; yield (batch, result, exit label) as fetches end.
+    def dispatch(self, take, fetch, until, fatal):
+        """Keep every slot busy without rounds; yield (batch, result, exit label, error) as fetches
+        end: error is None, or a failure that fatal(error) let through (result is None then).
 
         Whenever a slot is free and until() is false, take() gives the next batch (None: nothing to
-        send right now). A slow exit only holds its own slots. The first failed fetch stops intake;
-        what is still in flight finishes and is yielded, then that failure is raised.
+        send right now). A slot is free again as soon as its fetch ends, whatever the caller then
+        does with the batch. A slow exit only holds its own slots. The first fatal failure stops
+        intake; what is still in flight finishes and is yielded, then that failure is raised.
         """
         from concurrent.futures import FIRST_COMPLETED, wait
 
@@ -433,18 +435,18 @@ class IPPool:
             except ContractError as error:
                 self.log_error(error)
                 raise
-            return batch, result, getattr(self.local, "context", {}).get("ip")
+            return result, getattr(self.local, "context", {}).get("ip")
 
         failure = None
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            pending = set()
+            pending = {}
             try:
                 while True:
                     while failure is None and len(pending) < workers and not until():
                         batch = take()
                         if batch is None:
                             break
-                        pending.add(executor.submit(call, batch))
+                        pending[executor.submit(call, batch)] = batch
                     if not pending:
                         if failure is not None or until():
                             break
@@ -452,11 +454,13 @@ class IPPool:
                         continue
                     done, _ = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
                     for future in done:
-                        pending.remove(future)
-                        if future.exception() is not None:
-                            failure = failure or future.exception()
-                            continue
-                        yield future.result()
+                        batch, error = pending.pop(future), future.exception()
+                        if error is None:
+                            yield batch, *future.result(), None
+                        elif fatal(error):
+                            failure = failure or error
+                        else:
+                            yield batch, None, getattr(error, "context", {}).get("ip"), error
             finally:
                 for future in pending:
                     future.cancel()

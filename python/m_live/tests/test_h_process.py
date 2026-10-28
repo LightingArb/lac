@@ -582,7 +582,9 @@ def test_dispatch_refills_a_free_slot_at_once_and_takes_nothing_while_full(monke
     transport(monkeypatch, client, request)
     done = threading.Event()
     with ThreadPoolExecutor(max_workers=1) as consumer:
-        result = consumer.submit(lambda: list(client.dispatch(take, fetch, done.is_set)))
+        result = consumer.submit(
+            lambda: list(client.dispatch(take, fetch, done.is_set, lambda error: True))
+        )
         try:
             # The slow first batch holds one slot; the other three keep going through the rest.
             deadline = time.monotonic() + 2
@@ -611,14 +613,14 @@ def test_dispatch_stops_on_until_and_yields_exit_labels(monkeypatch):
         return client.request("POST", "https://test/prices", body=item)
 
     transport(monkeypatch, client, lambda *_: Response())
-    results = list(client.dispatch(lambda: next(count), fetch, stop.is_set))
+    results = list(client.dispatch(lambda: next(count), fetch, stop.is_set, lambda error: True))
     assert 6 <= len(results) <= 8
-    assert {label for _, _, label in results} == {"default", "192.0.2.1"}
-    assert all(result == {"value": 0.5} for _, result, _ in results)
+    assert {label for _, _, label, _ in results} == {"default", "192.0.2.1"}
+    assert all(result == {"value": 0.5} and error is None for _, result, _, error in results)
     client.close()
 
 
-def test_dispatch_failure_drains_in_flight_then_raises(monkeypatch):
+def test_dispatch_fatal_failure_drains_in_flight_then_raises(monkeypatch):
     client = pool(inflight=3)
     started, finished = threading.Event(), []
     items = iter(range(1000))
@@ -634,10 +636,41 @@ def test_dispatch_failure_drains_in_flight_then_raises(monkeypatch):
 
     yielded = []
     with pytest.raises(ContractError):
-        for batch, result, _ in client.dispatch(lambda: next(items), fetch, lambda: False):
+        for _, result, _, _ in client.dispatch(
+            lambda: next(items), fetch, lambda: False, lambda error: True
+        ):
             yielded.append(result)
     # Batches already sent finish and are handed over; nothing new starts after the failure.
     assert sorted(yielded) == sorted(finished) and 0 in yielded and len(finished) <= 4
+
+
+def test_dispatch_hands_back_other_failures_with_their_exit_and_goes_on(monkeypatch):
+    client = pool(ips=["192.0.2.1"], inflight=1, retries=1)
+    items = iter(range(1000))
+    stop = threading.Event()
+
+    def request(i, method, url, kwargs):
+        if kwargs["json"] == 1:
+            raise requests.ConnectionError("test proxy failure")
+        if kwargs["json"] == 6:
+            stop.set()
+        return Response()
+
+    def fetch(item):
+        return client.request("POST", "https://test/prices", body=item)
+
+    transport(monkeypatch, client, request)
+    results = list(
+        client.dispatch(
+            lambda: next(items), fetch, stop.is_set, lambda error: error.status in (401, 403)
+        )
+    )
+    failed = [(batch, label, error) for batch, result, label, error in results if error]
+    # Item 1 failed on both exits (one retry): handed back once, from the exit of the last try.
+    assert [(batch, type(error)) for batch, _, error in failed] == [(1, ProviderError)]
+    assert failed[0][1] in ("default", "192.0.2.1") and failed[0][2].status == 0
+    assert {batch for batch, _, _, error in results if not error} >= {0, 2, 3, 4, 5, 6}
+    client.close()
 
 
 def test_dispatch_keeps_quota_and_429_per_exit(monkeypatch):
@@ -654,7 +687,9 @@ def test_dispatch_keeps_quota_and_429_per_exit(monkeypatch):
 
     transport(monkeypatch, client, request)
     started = time.monotonic()
-    results = list(client.dispatch(lambda: next(items), fetch, lambda: len(calls) >= 6))
+    results = list(
+        client.dispatch(lambda: next(items), fetch, lambda: len(calls) >= 6, lambda error: True)
+    )
     # 192.0.2.1 answers 429 once and cools down; its batch moves to the default exit, which
     # keeps its own window of 2 per 0.5 s.
     assert [i for i, _ in calls].count(1) == 1
@@ -662,7 +697,8 @@ def test_dispatch_keeps_quota_and_429_per_exit(monkeypatch):
     default = [t for i, t in calls if i == 0]
     for first, third in zip(default, default[2:]):
         assert third - first >= 0.45
-    assert time.monotonic() - started >= 0.9 and all(label == "default" for *_, label in results)
+    assert time.monotonic() - started >= 0.9
+    assert all(label == "default" for _, _, label, _ in results)
     client.close()
 
 

@@ -106,7 +106,6 @@ def all_runtime() -> None:
                 auth_log_s=60,
                 max_response_bytes=64 * 1024 * 1024,
                 request_items=250,
-                refill_batches=100,
                 writers=4,
                 max_pending_writes=16,
                 summary_seconds=60,

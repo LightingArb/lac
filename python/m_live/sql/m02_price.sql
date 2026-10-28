@@ -4,7 +4,5 @@ CREATE TABLE m_live.m02_clob_price (
     best_bid NUMERIC CHECK (best_bid >= 0 AND best_bid <= 1),
     best_ask NUMERIC CHECK (best_ask >= 0 AND best_ask <= 1),
     requested_at TIMESTAMPTZ NOT NULL,
-    m_live_updated_at TIMESTAMPTZ NOT NULL,
-    next_due TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX clob_price_next_due ON m_live.m02_clob_price (next_due);
+    m_live_updated_at TIMESTAMPTZ NOT NULL
+) WITH (fillfactor = 70);
