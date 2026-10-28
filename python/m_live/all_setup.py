@@ -4,20 +4,22 @@ from h_shared.h_db import h_connect, h_setup
 
 
 def all_setup() -> None:
-    c01_migrate_price()
+    c01_migrate()
     h_setup("m_live", Path(__file__).parent / "sql")
 
 
-def c01_migrate_price() -> None:
-    """An existing price table loses next_due (round 3) and gets fillfactor 70, before the check.
+def c01_migrate() -> None:
+    """An existing price table loses next_due (round 3); existing price and book tables get
+    fillfactor 70, before the check.
 
-    A new database gets the table from sql/m02_price.sql; once both are done this does nothing.
+    A new database gets the tables from sql/; once done this does nothing.
     """
     with h_connect("postgres") as connection:
         if not connection.execute("SELECT 1 FROM pg_database WHERE datname='lac_data'").fetchone():
             return
     with h_connect() as connection:
         s01_migrate_price(connection)
+        s02_migrate_book(connection)
 
 
 def s01_migrate_price(connection) -> bool:
@@ -42,6 +44,18 @@ def s01_migrate_price(connection) -> bool:
     for change in changes:
         print(f"SETUP_MIGRATED m_live.m02_clob_price {change}", flush=True)
     return bool(changes)
+
+
+def s02_migrate_book(connection) -> bool:
+    """Set fillfactor 70 on an existing book table, as for prices. Returns whether it changed."""
+    options = connection.execute(
+        "SELECT reloptions FROM pg_class WHERE oid=to_regclass('m_live.m03_clob_book')"
+    ).fetchone()
+    if options is None or "fillfactor=70" in (options[0] or []):
+        return False
+    connection.execute("ALTER TABLE m_live.m03_clob_book SET (fillfactor = 70)")
+    print("SETUP_MIGRATED m_live.m03_clob_book fillfactor=70", flush=True)
+    return True
 
 
 if __name__ == "__main__":

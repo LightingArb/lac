@@ -2,6 +2,7 @@
 
 import json
 import time
+from collections import defaultdict
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -13,13 +14,17 @@ from h_shared.h_log import h_log
 from h_shared.h_process import Result
 
 
-def runtime_gamma_full(ips: IPPool, *, page_size: int, max_pages: int, write_batch: int) -> Result:
+def runtime_gamma_full(
+    ips: IPPool, *, page_size: int, max_pages: int, write_batch: int, transaction_events: int
+) -> Result:
     started = time.monotonic()
     scan_started = datetime.now(UTC)
     events, markets, outcomes, pages = c01_scan(ips, page_size, max_pages)
-    c02_publish(events, markets, outcomes, write_batch, scan_started)
+    writes = c02_publish(
+        events, markets, outcomes, write_batch, scan_started, transaction_events=transaction_events
+    )
     ips.report(success=len(events) + len(markets) + len(outcomes), no_data=int(not events))
-    c03_report(events, markets, outcomes, pages, ips.requests, started)
+    c03_report(events, markets, outcomes, pages, ips.requests, started, writes)
     return Result.COMPLETE
 
 
@@ -323,22 +328,54 @@ def c02_publish(
     outcomes: list[tuple],
     batch: int,
     scan_started: datetime | None = None,
-) -> int:
-    """Publish metadata and outcomes atomically; source time guards both writers."""
+    *,
+    transaction_events: int,
+) -> dict[str, float]:
+    """Publish in transactions of transaction_events events, each with its events' markets and
+    those markets' outcomes; source time guards both writers. A full sweep (scan_started) then
+    retires what it did not see in one short transaction. A failure keeps the transactions already
+    committed and retires nothing; the next sweep catches up."""
     events = sorted(events, key=lambda r: r[0])
-    markets = sorted(markets, key=lambda r: r[0])
-    event_ids, market_ids = [r[0] for r in events], [r[0] for r in markets]
+    children, results = defaultdict(list), defaultdict(list)
+    for market in markets:
+        children[market[1]].append(market)
+    for outcome in outcomes:
+        results[outcome[0]].append(outcome)
+    if children.keys() - {r[0] for r in events}:
+        raise ValueError("Every published market needs its event in the same publication")
+    seconds, started = [], time.monotonic()
+    with h_connect(autocommit=True) as connection:
+        for start in range(0, len(events), transaction_events):
+            chunk = events[start : start + transaction_events]
+            begun = time.monotonic()
+            s13_publish_events(
+                connection, chunk, [m for e in chunk for m in children[e[0]]], results, batch
+            )
+            seconds.append(time.monotonic() - begun)
+        if scan_started is not None:
+            begun = time.monotonic()
+            s14_retire(connection, [r[0] for r in events], [r[0] for r in markets], scan_started)
+            seconds.append(time.monotonic() - begun)
+    return {
+        "transactions": len(seconds),
+        "longest_transaction_seconds": round(max(seconds, default=0), 3),
+        "write_seconds": round(time.monotonic() - started, 3),
+    }
+
+
+def s13_publish_events(
+    connection, events: list[tuple], markets: list[tuple], results: dict, batch: int
+) -> None:
+    """One transaction: these events, their markets and the outcomes of the markets accepted."""
     published = datetime.now(UTC)
     events = [r[:18] + (published,) + r[19:] for r in events]
-    markets = [r[:24] + (published,) + r[25:] for r in markets]
-    with h_connect() as connection:
+    markets = sorted((r[:24] + (published,) + r[25:] for r in markets), key=lambda r: r[0])
+    with connection.transaction():
         # Both writers acquire existing rows in the same event -> market order.
-        # The full sweep also locks rows whose membership may be withdrawn.
         connection.execute(
-            """SELECT event_id FROM m_live.m01_event
-            WHERE event_id = ANY(%s) OR (%s AND in_current_scan)
+            """SELECT event_id FROM m_live.m01_event WHERE event_id = ANY(%s)
             ORDER BY event_id FOR NO KEY UPDATE""",
-            (event_ids, scan_started is not None),
+            ([r[0] for r in events],),
         ).close()
         h_upsert(
             connection,
@@ -371,17 +408,10 @@ def c02_publish(
             events,
             batch,
         )
-        if scan_started is not None:
-            connection.execute(
-                """UPDATE m_live.m01_event SET in_current_scan=false, m_live_updated_at=%s
-                WHERE in_current_scan AND NOT (event_id=ANY(%s)) AND m_live_updated_at < %s""",
-                (published, event_ids, scan_started),
-            )
         connection.execute(
-            """SELECT market_id FROM m_live.m01_market
-            WHERE market_id=ANY(%s) OR (%s AND in_current_scan)
+            """SELECT market_id FROM m_live.m01_market WHERE market_id=ANY(%s)
             ORDER BY market_id FOR NO KEY UPDATE""",
-            (market_ids, scan_started is not None),
+            ([r[0] for r in markets],),
         ).close()
         accepted = set()
         for start in range(0, len(markets), batch):
@@ -419,12 +449,6 @@ def c02_publish(
                     [v for row in rows for v in row],
                 )
             )
-        if scan_started is not None:
-            connection.execute(
-                """UPDATE m_live.m01_market SET in_current_scan=false, m_live_updated_at=%s
-                WHERE in_current_scan AND NOT (market_id=ANY(%s)) AND m_live_updated_at < %s""",
-                (published, market_ids, scan_started),
-            )
         # Market locks and RETURNING prevent a stale response from changing outcomes.
         h_upsert(
             connection,
@@ -433,14 +457,50 @@ def c02_publish(
             """ ON CONFLICT (market_id,outcome_index) DO UPDATE SET label=EXCLUDED.label,
             token_id=EXCLUDED.token_id,position_id=EXCLUDED.position_id,asset_id=EXCLUDED.asset_id,
             resolved_price=EXCLUDED.resolved_price""",
-            sorted((r for r in outcomes if r[0] in accepted), key=lambda r: (r[0], r[1])),
+            sorted((r for m in accepted for r in results[m]), key=lambda r: (r[0], r[1])),
             batch,
         )
-    return len(accepted)
+
+
+def s14_retire(
+    connection, event_ids: list[str], market_ids: list[str], scan_started: datetime
+) -> None:
+    """One transaction: rows this sweep did not see that were there before it started leave the
+    current scan; locked event -> market, each in id order, as the writers lock them."""
+    published = datetime.now(UTC)
+    with connection.transaction():
+        connection.execute(
+            """SELECT event_id FROM m_live.m01_event
+            WHERE in_current_scan AND NOT (event_id=ANY(%s)) AND m_live_updated_at < %s
+            ORDER BY event_id FOR NO KEY UPDATE""",
+            (event_ids, scan_started),
+        ).close()
+        connection.execute(
+            """UPDATE m_live.m01_event SET in_current_scan=false, m_live_updated_at=%s
+            WHERE in_current_scan AND NOT (event_id=ANY(%s)) AND m_live_updated_at < %s""",
+            (published, event_ids, scan_started),
+        )
+        connection.execute(
+            """SELECT market_id FROM m_live.m01_market
+            WHERE in_current_scan AND NOT (market_id=ANY(%s)) AND m_live_updated_at < %s
+            ORDER BY market_id FOR NO KEY UPDATE""",
+            (market_ids, scan_started),
+        ).close()
+        connection.execute(
+            """UPDATE m_live.m01_market SET in_current_scan=false, m_live_updated_at=%s
+            WHERE in_current_scan AND NOT (market_id=ANY(%s)) AND m_live_updated_at < %s""",
+            (published, market_ids, scan_started),
+        )
 
 
 def c03_report(
-    events: list, markets: list, outcomes: list, pages: int, requests: int, started: float
+    events: list,
+    markets: list,
+    outcomes: list,
+    pages: int,
+    requests: int,
+    started: float,
+    writes: dict[str, float],
 ) -> None:
     h_log(
         "runtime_gamma_full",
@@ -452,4 +512,5 @@ def c03_report(
         pages=pages,
         requests=requests,
         seconds=time.monotonic() - started,
+        **writes,
     )

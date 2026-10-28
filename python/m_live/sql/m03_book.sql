@@ -10,4 +10,4 @@ CREATE TABLE m_live.m03_clob_book (
     requested_at TIMESTAMPTZ NOT NULL,
     m_live_updated_at TIMESTAMPTZ NOT NULL,
     CHECK ((bids IS NULL) = (asks IS NULL))
-);
+) WITH (fillfactor = 70);

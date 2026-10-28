@@ -69,6 +69,7 @@ def all_runtime() -> None:
                 page_size=100,
                 max_pages=1000,
                 write_batch=1000,
+                transaction_events=1000,
             )
         )
     if args.unit in ("demand", "all"):
@@ -116,6 +117,7 @@ def all_runtime() -> None:
             h_process(
                 runtime_book,
                 once=args.once,
+                resident=True,
                 rest_ms=500,
                 ips=OUTBOUND_IPS,
                 ip_inflight=4,
@@ -127,9 +129,11 @@ def all_runtime() -> None:
                 auth_log_s=60,
                 max_response_bytes=64 * 1024 * 1024,
                 request_items=500,
-                max_markets=50000,
+                writers=2,
                 max_pending_writes=8,
+                summary_seconds=60,
                 book_seconds=300,
+                due_wait=0.5,
             )
         )
     h_wait(processes)

@@ -32,7 +32,7 @@ def test_merge_and_failed_product(monkeypatch):
 def test_publish_defaults_requests_and_retire(monkeypatch, empty_database):
     connection = empty_database
     monkeypatch.setattr(demand, "h_connect", lambda: nullcontext(connection))
-    monkeypatch.setattr(full, "h_connect", lambda: nullcontext(connection))
+    monkeypatch.setattr(full, "h_connect", lambda **kwargs: nullcontext(connection))
     event = json.loads((Path(__file__).parent / "gamma_event.json").read_text())
     event["active"], event["closed"], event["archived"] = True, False, False
     event["updatedAt"] = "2099-01-01T00:00:00Z"
@@ -42,7 +42,7 @@ def test_publish_defaults_requests_and_retire(monkeypatch, empty_database):
     source["updatedAt"] = event["updatedAt"]
     now = datetime.now(UTC)
     row, outcomes = full.s02_market(source, event["id"], 2, now)
-    full.c02_publish([full.s01_event(event, now)], [row], outcomes, 100)
+    full.c02_publish([full.s01_event(event, now)], [row], outcomes, 100, transaction_events=1)
 
     def published():
         return connection.execute(

@@ -4,16 +4,19 @@ import copy
 import json
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import psycopg
 import pytest
+import requests
 
 from h_shared.h_ip_pool import ContractError, HttpPolicy, IPPool
 from h_shared.h_process import Result
+from m_live.src import h_dispatch as dispatch
 from m_live.src.m03_book import runtime_book as book
 
 FIXTURE = json.loads((Path(__file__).parent / "books.json").read_text())
@@ -126,10 +129,43 @@ def test_requested_time_is_before_http(monkeypatch):
     client.close()
 
 
+def add_market(c, name, refresh=10, levels=0, outcomes=2):
+    market = "r7-" + name
+    c.execute(
+        """INSERT INTO m_live.m01_market
+        (market_id,event_id,sort_order,protocol_version,slug,question,active,closed,
+            archived,in_current_scan,m_live_updated_at)
+        VALUES (%s,'r7-event',0,'v1',%s,%s,true,false,false,true,%s)""",
+        (market, market, market, NOW),
+    )
+    for index in range(outcomes):
+        c.execute(
+            """INSERT INTO m_live.m01_outcome (market_id,outcome_index,label,asset_id)
+            VALUES (%s,%s,%s,%s)""",
+            (
+                market,
+                index,
+                str(index),
+                None if name == "missing" and index == 1 else f"{market}-{index}",
+            ),
+        )
+    if refresh is not None:
+        c.execute(
+            """INSERT INTO m_live.m01_demand_market (market_id,refresh_seconds,book_levels)
+            VALUES (%s,%s,%s)""",
+            (market, refresh, levels),
+        )
+
+
+# Books stored this many seconds ago.
+AGES = {"early": 350, "late": 80, "null": 20, "fresh": 100, "retired": 100}
+
+
 @pytest.fixture
 def database(monkeypatch, empty_database):
     c = empty_database
     monkeypatch.setattr(book, "h_connect", lambda **kwargs: nullcontext(c))
+    monkeypatch.setattr(dispatch, "h_connect", lambda **kwargs: nullcontext(c))
     c.execute(
         """INSERT INTO m_live.m01_event
         (event_id,slug,title,active,closed,archived,tags,in_current_scan,m_live_updated_at)
@@ -137,87 +173,95 @@ def database(monkeypatch, empty_database):
         (NOW,),
     )
     for name in ("a", "b", "early", "late", "null", "fresh", "one", "three", "missing", "retired"):
-        market = "r7-" + name
-        c.execute(
-            """INSERT INTO m_live.m01_market
-            (market_id,event_id,sort_order,protocol_version,slug,question,active,closed,
-                archived,in_current_scan,m_live_updated_at)
-            VALUES (%s,'r7-event',0,'v1',%s,%s,true,false,false,true,%s)""",
-            (market, market, market, NOW),
+        add_market(
+            c,
+            name,
+            None if name == "retired" else 60 if name == "late" else 10,
+            1 if name == "late" else None if name == "null" else 0,
+            1 if name == "one" else 3 if name == "three" else 2,
         )
-        for index in range(1 if name == "one" else 3 if name == "three" else 2):
-            c.execute(
-                """INSERT INTO m_live.m01_outcome (market_id,outcome_index,label,asset_id)
-                VALUES (%s,%s,%s,%s)""",
-                (
-                    market,
-                    index,
-                    str(index),
-                    None if name == "missing" and index == 1 else f"{market}-{index}",
-                ),
-            )
-        if name != "retired":
-            c.execute(
-                """INSERT INTO m_live.m01_demand_market (market_id,refresh_seconds,book_levels)
-                VALUES (%s,%s,%s)""",
-                (
-                    market,
-                    60 if name == "late" else 10,
-                    1 if name == "late" else None if name == "null" else 0,
-                ),
-            )
-        if name in ("early", "late", "null", "fresh", "retired"):
-            age = {"early": 350, "late": 80, "null": 20, "fresh": 100, "retired": 100}[name]
+        if name in AGES:
             c.execute(
                 """INSERT INTO m_live.m03_clob_book
                 (market_id,asset_id,bids,asks,requested_at,m_live_updated_at)
                 VALUES (%s,%s,'[]','[]',%s,%s)""",
-                (market, market + "-0", NOW - timedelta(seconds=age), NOW),
+                ("r7-" + name, f"r7-{name}-0", NOW - timedelta(seconds=AGES[name]), NOW),
             )
     return c
 
 
-def test_two_intervals_unseen_then_oldest_and_binary_only(database):
-    rows = book.s01_due(database, 100, NOW, 300)
-    assert [r[0] for r in rows] == ["r7-a", "r7-b", "r7-early", "r7-late", "r7-null"]
-    assert all(asset == market + "-0" for market, asset in rows)
-    assert book.s01_due(database, 2, NOW, 300) == rows[:2]
+def names(markets):
+    """Short names of market ids or (market, asset) pairs."""
+    return [(m if isinstance(m, str) else m[0]).removeprefix("r7-") for m in markets]
+
+
+def stored(connection, name):
+    return connection.execute(
+        "SELECT requested_at FROM m_live.m03_clob_book WHERE market_id=%s", ("r7-" + name,)
+    ).fetchone()
+
+
+def picker_of(size, once=False):
+    return dispatch.Picker("runtime_book", size, once, 0.5)
+
+
+def test_schedule_starts_from_demand_and_stored_books(database):
+    picker = picker_of(10)
+    changes = book.c01_maintain(picker, book_seconds=300)
+    assert changes == {"deleted": 1, "added": 6, "removed": 0, "interval_changed": 0}
+    # Binary demanded markets only; retired lost its book row.
+    assert set(names(picker.markets)) == {"a", "b", "early", "late", "null", "fresh"}
+    assert stored(database, "retired") is None
+    # book_levels=0: book_seconds; another book_levels (or null): the demand's interval.
+    seconds = {name: picker.markets["r7-" + name].seconds for name in names(picker.markets)}
+    assert seconds == {"a": 300, "b": 300, "early": 300, "late": 60, "null": 10, "fresh": 300}
+    a, early = picker.markets["r7-a"], picker.markets["r7-early"]
+    assert a.fetched is None and a.due == float("-inf") and a.asset == "r7-a-0"
+    assert early.fetched == pytest.approx((NOW - timedelta(seconds=350)).timestamp())
+    assert early.due == pytest.approx(early.fetched + 300)
     # The declared default is a parameter, not a hard-coded 300 inside the runtime.
-    assert "r7-fresh" in [r[0] for r in book.s01_due(database, 100, NOW, 90)]
+    other = picker_of(10)
+    book.c01_maintain(other, book_seconds=90)
+    assert other.markets["r7-fresh"].seconds == 90
 
 
-def test_round_cap_pending_and_removed_demand_cleanup(database, monkeypatch):
-    client = IPPool("test", [], 4, {"/books": (500, 10)}, HttpPolicy(30, 0, 60, 10000))
-    calls = []
+def test_take_due_only_unseen_first_and_wait_when_none_is_due(database):
+    picker = picker_of(2)
+    book.c01_maintain(picker, book_seconds=300)
+    now = time.time()
+    # Never fetched first, then due ones by due time; fresh is due in 200 s and is not taken.
+    batches = [dispatch.s05_take(picker, now) for _ in range(3)]
+    assert [names(b) for b in batches] == [["a", "b"], ["early", "late"], ["null"]]
+    assert dispatch.s05_take(picker, now) is None and not picker.finished
+    # Nothing due: no new look for half a second.
+    assert picker.look_again == now + 0.5
+    # null comes back: due an interval (10 s) after this request, and in flight until written.
+    at = datetime.now(UTC)
+    dispatch.s10_fetched(picker, [("r7-null", "r7-null-0", *(None,) * 6, at)], "default")
+    assert picker.markets["r7-null"].due == pytest.approx(at.timestamp() + 10)
+    assert "r7-null" in picker.inflight
+    future = Future()
+    future.set_result(0)
+    dispatch.s12_collect({future: batches[2]}, picker, block=False)
+    later = at.timestamp() + 10
+    assert dispatch.s05_take(picker, later - 1) is None
+    assert picker.look_again == pytest.approx(later - 0.5)
+    assert names(dispatch.s05_take(picker, later)) == ["null"]
 
-    def request(method, url, **kwargs):
-        calls.append(kwargs["body"])
-        return [response(r["token_id"]) for r in kwargs["body"]]
 
-    monkeypatch.setattr(client, "request", request)
-    assert (
-        book.runtime_book(
-            client, request_items=1, max_markets=2, max_pending_writes=2, book_seconds=300
-        )
-        == Result.PENDING
-    )
-    assert len(calls) == 2 and all(len(r) == 1 for r in calls)
-    assert (
-        database.execute(
-            "SELECT count(*) FROM m_live.m03_clob_book WHERE market_id='r7-retired'"
-        ).fetchone()[0]
-        == 0
-    )
-    database.execute("DELETE FROM m_live.m01_demand_market")
-    assert (
-        book.runtime_book(
-            client, request_items=1, max_markets=2, max_pending_writes=2, book_seconds=300
-        )
-        == Result.COMPLETE
-    )
-    assert database.execute("SELECT count(*) FROM m_live.m03_clob_book").fetchone()[0] == 0
-    assert len(calls) == 2
-    client.close()
+def test_reload_adds_drops_changes_intervals_and_deletes_rows(database):
+    picker = picker_of(10)
+    book.c01_maintain(picker, book_seconds=300)
+    late = picker.markets["r7-late"]
+    database.execute("DELETE FROM m_live.m01_demand_market WHERE market_id='r7-fresh'")
+    database.execute("UPDATE m_live.m01_demand_market SET book_levels=0 WHERE market_id='r7-late'")
+    add_market(database, "new")
+    changes = book.c01_maintain(picker, book_seconds=300)
+    assert changes == {"deleted": 1, "added": 1, "removed": 1, "interval_changed": 1}
+    assert "r7-fresh" not in picker.markets and stored(database, "fresh") is None
+    # late now has 300 s: its last fetch + 300 s is still ahead, so it is not taken.
+    assert late.seconds == 300 and late.due == pytest.approx(late.fetched + 300)
+    assert names(dispatch.s05_take(picker, time.time())) == ["a", "b", "new", "early", "null"]
 
 
 def test_publication_identity_demand_newer_and_exact_decimal(database):
@@ -264,82 +308,206 @@ def test_database_empty_and_missing_metadata(database):
     ).fetchone() == ([], [])
 
 
-@pytest.mark.parametrize("write_limit", [1, 3, 8])
-def test_fetch_continues_during_blocked_write_but_pending_data_is_bounded(monkeypatch, write_limit):
-    client = IPPool("test", [], 4, {"/books": (500, 10)}, HttpPolicy(30, 0, 60, 10000))
-    started, release, progressed = threading.Event(), threading.Event(), threading.Event()
-    fetched, published = [], []
-    lock = threading.Lock()
-    connection = object()
-    connections = []
+class Response:
+    def __init__(self, body, status=200):
+        self.body, self.status_code, self.headers = body, status, {}
 
-    def connect(**kwargs):
-        assert kwargs == {"autocommit": True}
-        connections.append(connection)
-        return nullcontext(connection)
+    def __enter__(self):
+        return self
 
-    def request(method, url, **kwargs):
-        asset = kwargs["body"][0]["token_id"]
-        if asset != "0":
-            assert started.wait(2)
-        with lock:
-            fetched.append(asset)
-            if started.is_set():
-                progressed.set()
-        return [response(asset)]
+    def __exit__(self, *_):
+        pass
 
-    def publish(conn, rows):
-        assert conn is connection
-        started.set()
+    def iter_content(self, **_):
+        yield self.body
+
+
+def fake_books(pool, monkeypatch, answer=None):
+    """Answer /books below IPPool.request (slots, retries and counters stay real) and record each
+    request's markets. answer(markets) may return a status or a book list, or raise."""
+    sent, lock = [], threading.Lock()
+
+    class Session:
+        def request(self, method, url, **kwargs):
+            tokens = [r["token_id"] for r in kwargs["json"]]
+            markets = {token.rsplit("-", 1)[0] for token in tokens}
+            with lock:
+                sent.append(sorted(markets))
+            status = answer(markets) if answer else 200
+            if isinstance(status, list):
+                return Response(json.dumps(status).encode())
+            return Response(json.dumps([response(t) for t in tokens]).encode(), status or 200)
+
+    monkeypatch.setattr(pool, "session", lambda index: Session())
+    return sent
+
+
+def settings(**overrides):
+    return {
+        "request_items": 1,
+        "writers": 2,
+        "max_pending_writes": 2,
+        "summary_seconds": 60,
+        "book_seconds": 300,
+        "due_wait": 0.5,
+    } | overrides
+
+
+def pool_of(inflight=4, retries=2):
+    return IPPool("test", [], inflight, {"/books": (500, 10)}, HttpPolicy(30, retries, 60, 10**7))
+
+
+def logs(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def capture_pickers(monkeypatch):
+    pickers, picker_class = [], dispatch.Picker
+
+    def capture(*args, **kwargs):
+        pickers.append(picker_class(*args, **kwargs))
+        return pickers[-1]
+
+    monkeypatch.setattr(book, "Picker", capture)
+    return pickers
+
+
+def test_once_fetches_unseen_and_due_once_then_logs_summary(database, monkeypatch, capsys):
+    pool = pool_of()
+    sent = fake_books(pool, monkeypatch)
+    result = book.runtime_book(pool, stop=threading.Event(), once=True, **settings())
+    assert result == Result.COMPLETE
+    assert sorted(m for r in sent for m in names(r)) == ["a", "b", "early", "late", "null"]
+    # Every fetched book is written; fresh is not due and keeps its row.
+    for name in ("a", "b", "early", "late", "null"):
+        assert stored(database, name)[0] > NOW
+    assert stored(database, "fresh")[0] == NOW - timedelta(seconds=100)
+    summary = next(log for log in logs(capsys) if log["event"] == "dispatch_summary")
+    exits = summary["exits"]["default"]
+    assert {k: v for k, v in exits.items() if not k.startswith("http_p")} == {
+        "requests": 5,
+        "markets": 5,
+        "errors": 0,
+        "requeued": 0,
+        "invalid": 0,
+        "http_429": 0,
+    }
+    assert 0 <= exits["http_p50"] <= exits["http_p95"] < 1
+    assert summary["fetched"] == summary["written"] == 5 and summary["deleted"] == 1
+    assert set(summary["groups"]) == {"10", "60", "300"}
+    assert summary["groups"]["300"]["markets"] == 4 and summary["groups"]["300"]["fetched"] == 4
+    assert summary["unseen"] == summary["inflight"] == 0 and pool.success == 5
+
+
+def test_resident_fetches_only_due_books_until_stopped(database, monkeypatch):
+    pool = pool_of()
+    sent = fake_books(pool, monkeypatch)
+    stop = threading.Event()
+    timer = threading.Timer(1, stop.set)
+    timer.start()
+    try:
+        result = book.runtime_book(pool, stop=stop, once=False, **settings())
+    finally:
+        timer.cancel()
+    assert result == Result.COMPLETE
+    # Within a second nothing is due again (the shortest interval is 10 s): each due book once,
+    # fresh (due in 200 s) and the non-binary or undemanded markets never.
+    fetched = sorted(m for r in sent for m in names(r))
+    assert fetched == ["a", "b", "early", "late", "null"]
+
+
+def test_failed_batch_goes_back_and_dispatch_goes_on(database, monkeypatch, capsys):
+    pool = pool_of()
+    failures = []
+
+    def answer(markets):
+        if markets == {"r7-b"} and len(failures) < 3:
+            failures.append(1)
+            raise requests.exceptions.ProxyError("test proxy failure")
+
+    sent = fake_books(pool, monkeypatch, answer)
+    result = book.runtime_book(pool, stop=threading.Event(), once=True, **settings())
+    # Three attempts (two retries) fail, the batch goes back, b is fetched on a later turn.
+    assert result == Result.COMPLETE and sent.count(["r7-b"]) == 4
+    assert stored(database, "b")[0] > NOW
+    records = logs(capsys)
+    summary = next(log for log in records if log["event"] == "dispatch_summary")
+    assert summary["exits"]["default"]["requeued"] == 1
+    assert summary["exits"]["default"]["invalid"] == 0
+    assert [log["markets"] for log in records if log["event"] == "batch_requeued"] == [1]
+
+
+@pytest.mark.parametrize("answer", [400, [SOURCE | {"asset_id": "r7-early-0", "hash": None}]])
+def test_invalid_batch_is_not_written_and_waits_an_interval(database, monkeypatch, capsys, answer):
+    pool = pool_of()
+    sent = fake_books(pool, monkeypatch, lambda m: answer if m == {"r7-early"} else 0)
+    pickers = capture_pickers(monkeypatch)
+    before = time.time()
+    result = book.runtime_book(pool, stop=threading.Event(), once=True, **settings())
+    # Sent once, not written (the stored book stays), next due an interval after this request.
+    assert result == Result.COMPLETE and sent.count(["r7-early"]) == 1
+    assert stored(database, "early")[0] == NOW - timedelta(seconds=350)
+    early = pickers[0].markets["r7-early"]
+    assert before <= early.fetched <= time.time() and early.due == early.fetched + 300
+    records = logs(capsys)
+    invalid = [log for log in records if log["event"] == "batch_invalid"]
+    assert len(invalid) == 1 and invalid[0]["market_ids"] == ["r7-early"]
+    assert invalid[0]["status"] == (400 if answer == 400 else 200)
+    summary = next(log for log in records if log["event"] == "dispatch_summary")
+    assert summary["exits"]["default"]["invalid"] == 1 and summary["written"] == 4
+
+
+def test_slot_frees_when_http_returns_and_books_stay_in_flight_until_written(
+    database, monkeypatch, capsys
+):
+    pool = pool_of(inflight=1)
+    sent = fake_books(pool, monkeypatch)
+    pickers = capture_pickers(monkeypatch)
+    release, writes, results = threading.Event(), [], []
+    publish = book.s08_publish
+
+    def blocked(connection, rows):
+        writes.append(rows[0][0])
         assert release.wait(5)
-        published.extend(rows)
-        return len(rows), len(rows), 0
+        return publish(connection, rows)
 
-    monkeypatch.setattr(book, "h_connect", connect)
-    monkeypatch.setattr(client, "request", request)
-    monkeypatch.setattr(book, "s08_publish", publish)
-    markets = [(str(i), str(i)) for i in range(100)]
-    with ThreadPoolExecutor(max_workers=1) as runner:
-        result = runner.submit(book.c02_refresh, client, markets, 1, write_limit)
-        try:
-            assert started.wait(2)
-            assert progressed.wait(2), "HTTP must progress while the first DB write is blocked"
-            time.sleep(0.1)
-            with lock:
-                waiting = len(fetched)
-            # Includes all completed or active fetches and the active write.
-            assert 1 < waiting <= write_limit + client.ip_inflight
-            time.sleep(0.1)
-            with lock:
-                assert len(fetched) == waiting, "Backpressure must stop further intake"
-            assert not published and not result.done()
-        finally:
-            release.set()
-        assert result.result(timeout=5) == (100, 100, 0)
-    assert len(connections) == 1
-    assert {r[0] for r in published} == {m[0] for m in markets}
-    assert client.success == 100
-    client.close()
+    monkeypatch.setattr(book, "s08_publish", blocked)
+    stop = threading.Event()
+    options = settings(writers=1, max_pending_writes=2)
+    runner = threading.Thread(
+        target=lambda: results.append(book.runtime_book(pool, stop=stop, once=False, **options))
+    )
+    runner.start()
+    try:
+        deadline = time.monotonic() + 3
+        while len(sent) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.2)
+        # The first write is stuck, yet with one exit slot a second batch went out; then two
+        # batches wait to be written and nothing more is sent.
+        assert len(sent) == 2 and pool.inflight == [0]
+        assert writes[0] in pickers[0].inflight and sent.count([writes[0]]) == 1
+    finally:
+        release.set()
+        stop.set()
+        runner.join(5)
+    assert results == [Result.COMPLETE] and not pickers[0].inflight
+    summary = next(log for log in logs(capsys) if log["event"] == "dispatch_summary")
+    assert summary["write_queue_max"] == 2 and summary["write_queue_full_seconds"] > 0
 
 
-def test_writer_error_is_propagated_and_intake_stops(monkeypatch):
-    client = IPPool("test", [], 4, {"/books": (500, 10)}, HttpPolicy(30, 0, 60, 10000))
-    fetched = []
-    monkeypatch.setattr(book, "h_connect", lambda **kwargs: nullcontext(object()))
-
-    def request(method, url, **kwargs):
-        fetched.append(1)
-        return []
+def test_database_error_ends_the_call_as_an_error(database, monkeypatch, capsys):
+    pool = pool_of()
+    fake_books(pool, monkeypatch)
 
     def fail(connection, rows):
-        raise RuntimeError("database write failed")
+        raise psycopg.OperationalError("test database failure")
 
-    monkeypatch.setattr(client, "request", request)
     monkeypatch.setattr(book, "s08_publish", fail)
-    with pytest.raises(RuntimeError, match="database write failed"):
-        book.c02_refresh(client, [(str(i), str(i)) for i in range(100)], 1, 3)
-    assert len(fetched) <= 3 + client.ip_inflight
-    client.close()
+    result = book.runtime_book(pool, stop=threading.Event(), once=False, **settings())
+    assert result == Result.ERROR
+    errors = [log for log in logs(capsys) if log["event"] == "database_error"]
+    assert errors and errors[0]["unit"] == "runtime_book"
 
 
 def test_real_legacy_zero_minimum_preserves_valid_levels(database):

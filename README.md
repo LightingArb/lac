@@ -125,7 +125,7 @@ SETUP_OK m_live tables=6
 SETUP_OK m_historical tables=1
 ```
 
-setup 可以重跑：缺的表會補上，已經存在的表會檢查欄位，不一致就報錯（不會自動遷移）。唯一的例外是價格表 `m_live.m02_clob_price`：已經有這張表時，m_live 的 setup 先在同一個 transaction 裡拿掉之前版本的 `next_due` 欄位與它的索引（印 `SETUP_MIGRATED m_live.m02_clob_price next_due dropped`），沒設 `fillfactor=70` 的設上（印 `SETUP_MIGRATED m_live.m02_clob_price fillfactor=70`），再做上面的檢查；之後重跑什麼都不改。fillfactor 只管之後寫入的頁，原本已滿的頁要等 VACUUM 清出空間（或 `VACUUM FULL` 整張重寫）才有留白。
+setup 可以重跑：缺的表會補上，已經存在的表會檢查欄位，不一致就報錯（不會自動遷移）。例外是價格表 `m_live.m02_clob_price` 與掛單簿表 `m_live.m03_clob_book`：已經有價格表時，m_live 的 setup 先在同一個 transaction 裡拿掉之前版本的 `next_due` 欄位與它的索引（印 `SETUP_MIGRATED m_live.m02_clob_price next_due dropped`）；兩張表沒設 `fillfactor=70` 的設上（印 `SETUP_MIGRATED m_live.m02_clob_price fillfactor=70`、`SETUP_MIGRATED m_live.m03_clob_book fillfactor=70`），再做上面的檢查；之後重跑什麼都不改。fillfactor 只管之後寫入的頁，原本已滿的頁要等 VACUUM 清出空間（或 `VACUUM FULL` 整張重寫）才有留白。
 
 ### 5. 啟動資料程式（終端機一）
 
@@ -136,8 +136,8 @@ uv run --env-file ../.env python -m m_live.all_runtime
 
 有 `.env.local`（例如用代理出口）時，把它接在 `.env` 後面：`uv run --env-file ../.env --env-file ../.env.local python -m m_live.all_runtime`。
 
-- 會開五個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 常駐抓報價，出口一有空位就補下一批，不分輪；`book` 抓到期掛單簿，有 pending 就立即續跑，完成後休息 0.5 秒；預設掛單簿間隔 300 秒。clob 每 60 秒記一筆 `dispatch_summary`（欄位見 §4 價格表）。
-- 空資料庫第一次：市場與需求資料發布後 clob、book 才有標的；clob 每 60 秒重讀一次需求表，新市場排在最前面，book 在下一輪開始取得。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
+- 會開五個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 常駐抓報價，出口一有空位就補下一批，不分輪；`book` 也常駐、不分輪，只抓已到期的掛單簿，預設間隔 300 秒。clob 與 book 用同一套派工，各自每 60 秒記一筆 `dispatch_summary`（欄位見 §4 價格表）。
+- 空資料庫第一次：市場與需求資料發布後 clob、book 才有標的；兩者每 60 秒重讀一次需求表，新市場排在最前面。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
 - 輸出是一行一個 JSON。`round_finished` 的 `result` 是 `complete` 才算成功。
 - 只跑一輪就結束：加 `--once`。只跑其中一個：加 `--unit recent`、`--unit full`、`--unit demand` 、`--unit clob` 或 `--unit book`。
 - 停止：`Ctrl+C`，會等目前的工作做完再結束。
@@ -239,12 +239,13 @@ flowchart LR
 │   │   ├── sql/               # 資料表定義
 │   │   └── src/
 │   │       ├── h_settings.py                # 讀 REFRESH_SECONDS、CLOB_INFLIGHT
+│   │       ├── h_dispatch.py                # 價格與掛單簿共用：記憶體排程、派工、失敗處理、摘要
 │   │       ├── m01_market/
 │   │       │   ├── runtime_gamma_recent.py  # 新市場、關閉、未定案追蹤
 │   │       │   ├── runtime_gamma_full.py    # 完整議題掃描
 │   │       │   └── runtime_demand.py        # 合併產品需求與大類間隔
 │   │       ├── m02_price/runtime_clob.py    # 常駐派工，記憶體排程抓最佳買賣價
-│   │       └── m03_book/runtime_book.py     # 抓第一結果的整本掛單簿
+│   │       └── m03_book/runtime_book.py     # 常駐派工，抓到期的第一結果整本掛單簿
 │   └── m_historical/          # 歷史分鐘價格（UTC 日陣列、常駐）
 └── typescript/
     └── web_page_demo/
@@ -261,7 +262,7 @@ flowchart LR
 - 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
 - **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；整本掛單簿預設每 300 秒，產品要求深度時依需求間隔；歷史每分鐘一格、每日一列，常駐補最近 7 個完整 UTC 日。
 - **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查；體育議題缺少完整比賽欄位時共用這次查詢，只有已附完整標籤與市場清單、卻缺比賽欄位的體育議題才另外加入補查。體育比賽另有獨立的追蹤集合與記憶體游標，每輪最多 500 個議題，不佔一般市場追蹤的 1,000 個名額。條件是 sports 議題、ended 不是 true、底下至少一個已關閉市場；用最早的 closed_time 限定 24 小時內，無可用 closed_time 就不納入。每個議題只選 market_id 最小的已關閉市場，每批 100 個呼叫 /markets，直接讀附帶議題的比賽欄位，不查 /events、不更新 teams 或 sport。ended=true 或最早關閉已超過 24 小時就停止。參數 game_follow_hours=24 與 game_follow_max=500 在 all_runtime。
-- **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描只撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。identity 與結算永久保留。
+- **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描先全部掃完才寫（沒掃完不發布），寫入時每 1,000 個議題（連同底下的市場與 outcomes）一個 transaction，議題 → 市場各照編號上鎖；全部寫完後再用一個短 transaction 撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。寫到一半失敗時已寫的留著、這次不撤下，下一次全掃補上。全掃寫入的那幾分鐘，讀的人可能看到一部分議題已更新、一部分還沒。`published` log 有 `transactions`（含撤下那一個）、`longest_transaction_seconds`、`write_seconds`（整段寫入）。identity 與結算永久保留。
 - **結算：** resolution_status 原樣存 v1 的 umaResolutionStatus 或 v2 的 resolutionStatus；只有 resolved 才寫各 outcome 的 resolved_price，包含 0.5／0.5。closed 或 1／0 價格本身不代表定案。resolved_seen_at 是 Web 首次看到 resolved 的時間，只寫一次；這是 Gamma 回報的結算，沒有宣稱鏈上付款已驗證。
 - **體育比賽資料：** 以議題的 `sports` 標籤辨識，full 與 recent 都按 Polymarket 原值保存。比賽中的比分跟隨 600 秒全掃；比賽／市場關閉後由 recent 在上述追蹤窗口內補到來源回報的結束狀態，資料永久保留。比賽結束後 Polymarket 再改的 period（例如 End Q4 → VFT）與球隊戰績不再由這條補追更新；比分與 ended 以追到的那次為準，超過窗口仍缺 ended 時不能宣稱已取得最終比分。比分倒退也照存，不修正、不推論勝負；缺少或 JSON null 存 SQL null，文字空字串保留，缺省布林不當 false。非體育議題及其市場的體育欄位是 null。`ended` 缺省代表來源未提供，不宣稱已取得最終比分；不另存無可靠來源的原訂開賽時間。
 - **Gamma IP 額度：** 每 IP 在途 4；recent 的 markets 300／10 秒、events 100／10 秒，full 的 events 400／10 秒；keyset 算在同名列表額度內。來源：[Polymarket Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)。demand 沒有 HTTP 額度，也不能發出 HTTP。
@@ -365,25 +366,28 @@ flowchart LR
 
 只抓需求表中恰好兩個結果、兩個結果都有 asset 的市場。第二個結果的 `best_bid = 1 - 第一個 best_ask`、`best_ask = 1 - 第一個 best_bid`；被減的值是 null，對應結果也維持 null。中間價不存表，由讀取端以 `(best_bid + best_ask) / 2` 計算，缺任一邊時為 null。
 
-`runtime_clob` 常駐，不分輪：
+`runtime_clob` 常駐，不分輪（排程、派工、失敗處理與摘要在 `h_dispatch.py`，掛單簿也用這一份）：
 
 - **排程在記憶體：** runtime 自己記每個市場的「下次該抓的時間」（heap，最早的在最前面）。啟動時從需求表＋價格表算一次：`requested_at + 間隔`，沒有價格列的排最前面。一批抓回來就把那批每個市場改成「這次請求的時間＋間隔」，不管有沒有寫進資料庫。每 60 秒重讀需求表：加新市場、拿掉已不在需求表的、間隔變了（改設定或產品要求）的改成「上次抓的時間＋新間隔」。不靠資料庫排序。
 - **挑法：** 每次從記憶體取最早的 250 個，到期沒到期都取，不等到期；正在途中的不取。
 - **派工：** 每個出口（預設、本機 IP、代理）最多 `CLOB_INFLIGHT` 個在途請求（預設 32）；哪個出口一有空位，就補一批 250 個市場（一個 `POST /prices`，含每個市場第一個結果的 BUY／SELL）。慢的出口只佔住自己的位子。出口的位子在 HTTP 回來（或失敗）時就空出來，不等寫入；那批的市場則維持「在途」到寫完才解除，所以同一個市場不會同時在兩批裡。額度（每個出口 `/prices` 500 次／10 秒）、429 冷卻、重試照 IP 池的規則。
-- **失敗的批放回去：** 一批重試用完還失敗（ProxyError、逾時、5xx、其他 4xx、回應不合法）：那批的市場解除在途、下次該抓的時間不動（之後照順序再被取到），那個出口記一次 `requeued`，log 一筆 `batch_requeued`，派工繼續。只有 401／403、全部出口都被 429 擋住、資料庫錯誤（log `database_error`）、設定錯誤才讓這次結束，照共用排程等待後重新開始；結束前停止派新的，等在途的回來寫完。
+- **失敗分兩種，派工都繼續：**
+  - **換個出口或等一下可能就好的**（ProxyError、逾時、連線錯誤、5xx；重試用完還失敗）：放回去。那批的市場解除在途、下次該抓的時間不動（之後照順序再被取到），那個出口記一次 `requeued`，log 一筆 `batch_requeued`。
+  - **重抓也會一樣的**（回應不合法、401／403／429 以外的 4xx；不重試）：那批的市場照「抓過了」處理，下次該抓的時間＝這次請求時間＋間隔，不寫資料庫；那個出口記一次 `invalid`，log 一筆 `batch_invalid`（出口、HTTP 狀態、原因、市場數、前 5 個 `market_id`）。
+  - 只有 401／403、全部出口都被 429 擋住、資料庫錯誤（log `database_error`）、設定錯誤才讓這次結束，照共用排程等待後重新開始；結束前停止派新的，等在途的回來寫完。
 - **少寫：** 4 條 autocommit 連線的小池，每批回應一個 statement。一個市場只在「買價或賣價跟表裡不一樣（含有變沒有）」「表裡的 `requested_at` 到這次請求已經滿一個間隔」或「表裡還沒有這個市場」時才寫；寫入前重讀需求與第一結果 identity，較舊的請求不覆寫較新的列。等著寫的批數到 16 就先不派新的請求（已經在路上的照樣回來排隊）。
 - **維護與摘要：** 每 60 秒：刪掉已不在需求表的市場的價格列；重讀需求表進排程；再記一筆 `dispatch_summary`。
 
 `dispatch_summary` 欄位：
 - `seconds`：這段的秒數。
-- `exits` 每個出口：`requests`（送出的請求，含重試）、`markets`（抓回的市場數）、`errors`（429 以外失敗的請求，含重試）、`requeued`（放回去的批數）、`http_429`；另有 `all_exits_429`（全部出口都在冷卻而擋下的次數）。
-- `fetched`（抓回的市場數）、`written`（實際寫入的列數）、`write_queue_max`（等著寫的批數最大值，含正在寫的）、`write_queue_full_seconds`（因為等著寫的滿 16 批而停派的秒數）。
+- `exits` 每個出口：`requests`（送出的請求，含重試）、`markets`（抓回的市場數）、`errors`（429 以外失敗的請求，含重試）、`requeued`（放回去的批數）、`invalid`（往後推一個間隔的批數）、`http_429`、`http_p50`／`http_p95`（這個出口每個 HTTP 200 從送出到讀完回應的秒數，量每個 IP 的速度用；這段沒有成功的回應時是 null）；另有 `all_exits_429`（全部出口都在冷卻而擋下的次數）。
+- `fetched`（抓回的市場數）、`written`（實際寫入的列數）、`write_queue_max`（等著寫的批數最大值，含正在寫的）、`write_queue_full_seconds`（因為等著寫的滿了〔價格 16 批、掛單簿 8 批〕而停派的秒數）。
 - `groups` 每個間隔（秒）：`markets`（排程裡的市場數）、`fetched`（抓過的）、`age_p50`／`age_p95`（距上次抓的秒數，用記憶體裡的時間）、`overdue`／`overdue_share`（抓過的裡面超過間隔的數量與比例）。
 - `unseen`（還沒抓過的）、`inflight`；`deleted`（刪掉的價格列）、`added`／`removed`／`interval_changed`（這次重讀需求表加、減、改間隔的市場數）。
 
-一個請求實測 BUY 對應 bid、SELL 對應 ask；API 的 bid=0、ask=1 空邊界值記為 null。仍在需求表的舊價格保留原 requested_at，由讀取端判斷能否使用。`--once` 時只抓沒抓過的與已到期的，每個市場最多一次（失敗放回去的會再抓），抓完就結束。
+一個請求實測 BUY 對應 bid、SELL 對應 ask；API 的 bid=0、ask=1 空邊界值記為 null。仍在需求表的舊價格保留原 requested_at，由讀取端判斷能否使用。`--once` 時只抓沒抓過的與已到期的，每個市場最多一次（放回去的會再抓，往後推的不會），抓完就結束。
 
-**`m_live.m03_clob_book`**：一列＝一個市場第一個結果的最新整本掛單簿；主鍵 `market_id`，參照 `m01_market`。
+**`m_live.m03_clob_book`**：一列＝一個市場第一個結果的最新整本掛單簿；主鍵 `market_id`，參照 `m01_market`。跟價格表一樣 `fillfactor=70`，目的是更新時可以在同一頁裡改（HOT），表不越寫越大。
 
 | 欄位 | 型別 | 意思 |
 | --- | --- | --- |
@@ -398,9 +402,14 @@ flowchart LR
 
 只抓需求表中恰好兩個結果、都有 asset 的市場，保留全部價層。合法空邊為 `[]`；provider 沒回 token 時 bids、asks 與來源 metadata 都是 SQL null，與空簿區分。錯誤的價層、重複 requested token 或不合法 metadata 使該批失敗，不發布可疑資料；未要求的 token 忽略。第二個結果的買單可用第一個的賣單價格做 `1 - price`、數量相同推導，賣單同理；這是鏡像推導，非第二本獨立 snapshot（實測完整深度有少數差異）。價格表仍由 `/prices` 獨立更新。
 
-`runtime_book` 優先選沒有列的市場，其次按到期時間、market_id 排序。`book_levels=0` 用入口的 `book_seconds=300` 秒；`book_levels>0` 或 null 用需求表 `refresh_seconds`，但都抓整本。每輪最多 50,000 市場、每個 `POST /books` 最多 500 個 token；每 IP 在途 4、500 次／10 秒。每輪重用一條寫入連線，HTTP 與寫入分開，待寫入最多 8 批（含正在寫的一批），額外抓取受 IP 池在途上限約束。
+`runtime_book` 常駐，不分輪，用跟價格同一套派工（記憶體排程、出口有空位就派、兩種失敗、位子 HTTP 回來就釋放、市場在途到寫完才解除、每 60 秒維護與 `dispatch_summary`，欄位同價格）。不同的地方：
 
-每批寫入重新確認需求及第一結果 identity，舊 requested_at 不蓋新列；每輪先刪除需求外的掛單簿。還有到期市場回 pending，完成後休息 0.5 秒。requested_at 與來源 timestamp 不相互替代；資料可用性與新鮮度由讀取端判斷。
+- **間隔：** `book_levels=0` 用入口的 `book_seconds=300` 秒；`book_levels>0` 或 null 用需求表 `refresh_seconds`，但都抓整本。下次該抓的時間＝上次請求時間＋間隔；啟動時從需求表＋掛單簿表算一次，沒有列的排最前面。
+- **只抓到期的：** 一本平均約 730 bytes，是價格的好幾倍，有空就派會把頻寬與寫入吃掉，所以只取已經到期的（沒抓過的最先）；沒有到期的就等，0.5 秒（入口的 `due_wait`）後再看一次。
+- **派工與寫入：** 一個 `POST /books` 最多 500 個 token；每個出口在途 4、500 次／10 秒。2 條 autocommit 寫入連線，每批一個 statement，等著寫的到 8 批就先不派新的。每次抓到的都寫（只抓到期的，本來就都到了該寫的時候），`requested_at` 是該批送出請求前的時間。
+- **維護：** 每 60 秒刪掉需求外的掛單簿列（照 market_id 順序上鎖，跟寫入一樣）、重讀需求表進排程。`--once` 時沒抓過的與已到期的各抓一次就結束。
+
+每批寫入重新確認需求及第一結果 identity，舊 requested_at 不蓋新列。requested_at 與來源 timestamp 不相互替代；資料可用性與新鮮度由讀取端判斷。
 
 **`m_historical.m01_price_day`**：一列＝一個市場一個 UTC 日；主鍵 `(market_id, day)`。market_id 外鍵參照 m_live.m01_market。只存第一個結果，永久保留。
 

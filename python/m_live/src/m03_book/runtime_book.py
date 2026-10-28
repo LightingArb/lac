@@ -1,103 +1,81 @@
-"""Refresh whole first-outcome order books; null means missing and [] means empty."""
+"""Refresh whole first-outcome order books once due (the shared dispatch in h_dispatch); null
+means missing and [] means empty."""
 
-import time
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import partial
 
 from h_shared.h_db import h_connect
 from h_shared.h_ip_pool import ContractError, IPPool
-from h_shared.h_log import h_log
 from h_shared.h_process import Result
+from m_live.src.h_dispatch import Picker, h_dispatch, h_merge
 
 
 def runtime_book(
-    ips: IPPool, *, request_items: int, max_markets: int, max_pending_writes: int, book_seconds: int
+    ips: IPPool,
+    *,
+    stop,
+    once: bool,
+    request_items: int,
+    writers: int,
+    max_pending_writes: int,
+    summary_seconds: float,
+    book_seconds: int,
+    due_wait: float,
 ) -> Result:
-    """Read demand, request public CLOB books and publish current depth; invalid data raises ContractError."""
-    started = time.monotonic()
-    markets, deleted = c01_markets(max_markets, book_seconds)
-    published, available, empty = c02_refresh(ips, markets, request_items, max_pending_writes)
-    return c03_report(
-        ips, len(markets), published, available, empty, deleted, started, book_seconds
+    """Resident: until stop is set, fill every free exit slot with up to request_items markets
+    whose book is due (never fetched first); with none due, look again after due_wait seconds.
+    Interval: book_seconds for book_levels=0, else the demand's refresh_seconds. Every response is
+    written. once: never-fetched and due markets once each, then return.
+
+    Failed batches, the end of a call and the summary as in h_dispatch. Every summary_seconds:
+    delete books no longer demanded, reload the demand table into the schedule, log
+    dispatch_summary.
+    """
+    return h_dispatch(
+        ips,
+        Picker("runtime_book", request_items, once, due_wait),
+        stop=stop,
+        maintain=partial(c01_maintain, book_seconds=book_seconds),
+        fetch=partial(s02_refresh, ips),
+        write=partial(s07_write, ips),
+        writers=writers,
+        max_pending_writes=max_pending_writes,
+        summary_seconds=summary_seconds,
     )
 
 
-def c01_markets(maximum: int, book_seconds: int) -> tuple[list[tuple[str, str]], int]:
-    with h_connect() as connection:
+def c01_maintain(picker: Picker, *, book_seconds: int) -> dict[str, int]:
+    with h_connect(autocommit=True) as connection:
+        # Rows are locked in market_id order, as writers lock them, so the two never deadlock.
         deleted = connection.execute("""
-            DELETE FROM m_live.m03_clob_book AS p
-            WHERE NOT EXISTS (
-                SELECT 1 FROM m_live.m01_demand_market AS d WHERE d.market_id=p.market_id
+            DELETE FROM m_live.m03_clob_book
+            WHERE market_id IN (
+                SELECT p.market_id FROM m_live.m03_clob_book AS p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM m_live.m01_demand_market AS d WHERE d.market_id=p.market_id
+                )
+                ORDER BY p.market_id FOR UPDATE
             )
         """).rowcount
-        markets = s01_due(connection, maximum, datetime.now(UTC), book_seconds)
-    return markets, deleted
+        demand = s01_demand(connection, book_seconds)
+    return {"deleted": deleted} | h_merge(picker, demand)
 
 
-def s01_due(connection, maximum: int, now: datetime, book_seconds: int) -> list[tuple[str, str]]:
+def s01_demand(connection, book_seconds: int) -> list[tuple]:
+    """Demanded binary markets (both outcomes with an asset): first-outcome asset, book interval
+    and the stored book's requested_at in epoch seconds (None without a book row)."""
     return connection.execute(
-        """WITH eligible AS (
-            SELECT d.market_id,
-                CASE WHEN d.book_levels=0 THEN %s ELSE d.refresh_seconds END AS refresh_seconds,
-                min(o.asset_id) FILTER (WHERE o.outcome_index=0) AS asset_id
-            FROM m_live.m01_demand_market AS d
-            JOIN m_live.m01_outcome AS o ON o.market_id=d.market_id
-            GROUP BY d.market_id, d.refresh_seconds, d.book_levels
-            HAVING count(*)=2 AND count(o.asset_id)=2
-                AND count(*) FILTER (WHERE o.outcome_index=0)=1
-        )
-        SELECT e.market_id,e.asset_id FROM eligible AS e
-        LEFT JOIN m_live.m03_clob_book AS p ON p.market_id=e.market_id
-        WHERE p.market_id IS NULL
-           OR p.requested_at + e.refresh_seconds * interval '1 second' <= %s
-        ORDER BY (p.market_id IS NOT NULL),
-            p.requested_at + e.refresh_seconds * interval '1 second' NULLS FIRST,
-            e.market_id
-        LIMIT %s""",
-        (book_seconds, now, maximum),
+        """SELECT d.market_id, min(o.asset_id) FILTER (WHERE o.outcome_index=0),
+            CASE WHEN d.book_levels=0 THEN %s::integer ELSE d.refresh_seconds END,
+            extract(epoch FROM p.requested_at)::float8
+        FROM m_live.m01_demand_market AS d
+        JOIN m_live.m01_outcome AS o ON o.market_id=d.market_id
+        LEFT JOIN m_live.m03_clob_book AS p ON p.market_id=d.market_id
+        GROUP BY d.market_id, d.refresh_seconds, d.book_levels, p.requested_at
+        HAVING count(*)=2 AND count(o.asset_id)=2 AND count(*) FILTER (WHERE o.outcome_index=0)=1""",
+        (book_seconds,),
     ).fetchall()
-
-
-def c02_refresh(
-    ips: IPPool, markets: list[tuple[str, str]], size: int, max_pending_writes: int
-) -> tuple[int, int, int]:
-    if max_pending_writes < 1:
-        raise ValueError("Declare a positive pending-write bound")
-    if not markets:
-        return 0, 0, 0
-    batches = (markets[i : i + size] for i in range(0, len(markets), size))
-    published = available = empty = 0
-    # One connection per round, one committed statement per response. The writer
-    # runs independently of HTTP; autocommit leaves no idle transaction during I/O.
-    # At most max_pending_writes write batches (including the active write), plus
-    # the IP pool's bounded fetch futures, are retained. Backpressure stops intake.
-    with (
-        h_connect(autocommit=True) as connection,
-        ThreadPoolExecutor(max_workers=1) as writer,
-        closing(ips.map(partial(s02_refresh, ips), batches)) as responses,
-    ):
-        pending = deque()
-        try:
-            for rows in responses:
-                pending.append(writer.submit(s07_write, ips, connection, rows))
-                while pending and (pending[0].done() or len(pending) >= max_pending_writes):
-                    counts = pending.popleft().result()
-                    published += counts[0]
-                    available += counts[1]
-                    empty += counts[2]
-            for future in pending:
-                counts = future.result()
-                published += counts[0]
-                available += counts[1]
-                empty += counts[2]
-        finally:
-            for future in pending:
-                future.cancel()
-    return published, available, empty
 
 
 def s02_refresh(ips: IPPool, markets: list[tuple[str, str]]) -> list[tuple]:
@@ -172,10 +150,10 @@ def s06_timestamp(value) -> datetime:
         raise ContractError("CLOB timestamp outside supported range") from None
 
 
-def s07_write(ips: IPPool, connection, rows: list[tuple]) -> tuple[int, int, int]:
+def s07_write(ips: IPPool, connection, rows: list[tuple]) -> int:
     counts = s08_publish(connection, rows)
     ips.report(success=counts[0], no_data=counts[0] - counts[1] + counts[2])
-    return counts
+    return counts[0]
 
 
 def s08_publish(connection, rows: list[tuple]) -> tuple[int, int, int]:
@@ -222,31 +200,3 @@ def s08_publish(connection, rows: list[tuple]) -> tuple[int, int, int]:
         sum(r[0] for r in published),
         sum(r[1] is True for r in published),
     )
-
-
-def c03_report(
-    ips: IPPool,
-    selected: int,
-    published: int,
-    available: int,
-    empty: int,
-    deleted: int,
-    started: float,
-    book_seconds: int,
-) -> Result:
-    with h_connect() as connection:
-        pending = bool(s01_due(connection, 1, datetime.now(UTC), book_seconds))
-    h_log(
-        "runtime_book",
-        "published",
-        selected_markets=selected,
-        published_markets=published,
-        available_books=available,
-        empty_books=empty,
-        missing_books=published - available,
-        deleted=deleted,
-        pending=pending,
-        requests=ips.requests,
-        seconds=time.monotonic() - started,
-    )
-    return Result.PENDING if pending else Result.COMPLETE

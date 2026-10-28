@@ -15,6 +15,7 @@ import requests
 
 from h_shared.h_ip_pool import ContractError, HttpPolicy, IPPool, ProviderError
 from h_shared.h_process import Result
+from m_live.src import h_dispatch as dispatch
 from m_live.src.m02_price import runtime_clob as clob
 
 FIXTURES = json.loads((Path(__file__).parent / "prices.json").read_text())
@@ -120,6 +121,7 @@ def add_market(connection, name, seconds=10, outcomes=2):
 def database(monkeypatch, empty_database):
     connection = empty_database
     monkeypatch.setattr(clob, "h_connect", lambda **kwargs: nullcontext(connection))
+    monkeypatch.setattr(dispatch, "h_connect", lambda **kwargs: nullcontext(connection))
     connection.execute(
         """INSERT INTO m_live.m01_event
         (event_id,slug,title,active,closed,archived,tags,in_current_scan,m_live_updated_at)
@@ -154,16 +156,24 @@ def stored(connection, name):
 def written(picker, batch):
     """What the dispatcher does once a batch's write is done."""
     future = Future()
-    future.set_result((0, 0, 0))
-    clob.s17_collect({future: batch}, picker, block=False)
+    future.set_result(0)
+    dispatch.s12_collect({future: batch}, picker, block=False)
 
 
 def came_back(picker, batch, at):
-    clob.s14_fetched(picker, [(m, a, None, None, at) for m, a in batch], "default")
+    dispatch.s10_fetched(picker, [(m, a, None, None, at) for m, a in batch], "default")
+
+
+def picker_of(size, once=False):
+    return dispatch.Picker("runtime_clob", size, once)
+
+
+def take(picker):
+    return dispatch.s05_take(picker, time.time())
 
 
 def test_schedule_starts_from_demand_and_stored_prices(database):
-    picker = clob.Picker(2, once=False)
+    picker = picker_of(2)
     changes = clob.c01_maintain(picker)
     assert changes == {"deleted": 1, "added": 5, "removed": 0, "interval_changed": 0}
     # Binary demanded markets only; retired lost its price row.
@@ -176,36 +186,59 @@ def test_schedule_starts_from_demand_and_stored_prices(database):
 
 
 def test_take_earliest_first_and_never_twice_in_flight(database):
-    picker = clob.Picker(2, once=False)
+    picker = picker_of(2)
     clob.c01_maintain(picker)
-    batches = [clob.s08_take(picker, time.time()) for _ in range(3)]
+    batches = [take(picker) for _ in range(3)]
     # Never fetched first, then by due time, due or not (fresh is due in an hour).
     assert [names(b) for b in batches] == [["a", "b"], ["early", "late"], ["fresh"]]
     # Everything is in flight: nothing goes twice, and the resident runtime keeps waiting.
-    assert clob.s08_take(picker, time.time()) is None and not picker.finished
+    assert take(picker) is None and not picker.finished
     # early and late come back: due an interval after this request, written or not ...
     at = datetime.now(UTC)
     came_back(picker, batches[1], at)
     assert picker.markets["r4-test-late"].due == pytest.approx(at.timestamp() + 60)
     # ... but in flight until their write is done.
-    assert clob.s08_take(picker, time.time()) is None
+    assert take(picker) is None
     written(picker, batches[1])
-    assert names(clob.s08_take(picker, time.time())) == ["early", "late"]
+    assert names(take(picker)) == ["early", "late"]
 
 
 def test_failed_batch_goes_back_unchanged(database):
-    picker = clob.Picker(2, once=False)
+    picker = picker_of(2)
     clob.c01_maintain(picker)
-    batch = clob.s08_take(picker, time.time())
+    batch = take(picker)
     due = {m: picker.markets[m].due for m, _ in batch}
-    clob.s13_requeue(picker, batch, "198.51.100.7:8080", ProviderError(0))
+    dispatch.s08_requeue(picker, batch, "198.51.100.7:8080", ProviderError(0))
     assert not picker.inflight and picker.exit_requeued == {"198.51.100.7:8080": 1}
     assert {m: picker.markets[m].due for m, _ in batch} == due
-    assert clob.s08_take(picker, time.time()) == batch
+    assert take(picker) == batch
+
+
+def test_invalid_batch_counts_as_fetched_and_comes_up_an_interval_later(database, capsys):
+    picker = picker_of(2)
+    clob.c01_maintain(picker)
+    take(picker)
+    batch = take(picker)  # early (10 s) and late (60 s)
+    error = ContractError("Unexpected CLOB response keys")
+    error.requested = time.time() - 1
+    dispatch.s09_invalid(picker, batch, "198.51.100.7:8080", error)
+    assert picker.inflight == {"r4-test-a", "r4-test-b"}
+    assert picker.exit_invalid == {"198.51.100.7:8080": 1} and not picker.exit_requeued
+    early, late = picker.markets["r4-test-early"], picker.markets["r4-test-late"]
+    assert early.fetched == late.fetched == error.requested
+    assert (early.due, late.due) == (error.requested + 10, error.requested + 60)
+    # Nothing written: the stored rows stay as they were.
+    assert stored(database, "early")[2] == NOW - timedelta(seconds=50)
+    # Taken again in their turn: before fresh, which is due in an hour.
+    assert names(take(picker)) == ["early", "late"]
+    log = next(log for log in logs(capsys) if log["event"] == "batch_invalid")
+    assert log["ip"] == "198.51.100.7:8080" and log["markets"] == 2
+    assert names(log["market_ids"]) == ["early", "late"]
+    assert log["reason"] == "Unexpected CLOB response keys"
 
 
 def test_reload_adds_drops_and_moves_changed_intervals(database):
-    picker = clob.Picker(2, once=False)
+    picker = picker_of(2)
     clob.c01_maintain(picker)
     late = picker.markets["r4-test-late"]
     database.execute("DELETE FROM m_live.m01_demand_market WHERE market_id='r4-test-fresh'")
@@ -218,35 +251,36 @@ def test_reload_adds_drops_and_moves_changed_intervals(database):
     assert "r4-test-fresh" not in picker.markets and late.seconds == 5
     assert late.due == pytest.approx(late.fetched + 5)
     # Never fetched (a, b, new) first; late now comes before early.
-    takes = [names(clob.s08_take(picker, time.time())) for _ in range(3)]
+    takes = [names(take(picker)) for _ in range(3)]
     assert takes == [["a", "b"], ["new", "late"], ["early"]]
-    assert clob.s08_take(picker, time.time()) is None
+    assert take(picker) is None
 
 
 def test_once_takes_due_markets_once_then_finishes(database):
-    picker = clob.Picker(3, once=True)
+    picker = picker_of(3, once=True)
     clob.c01_maintain(picker)
-    assert names(clob.s08_take(picker, time.time())) == ["a", "b", "early"]
-    assert names(clob.s08_take(picker, time.time())) == ["late"]
+    assert names(take(picker)) == ["a", "b", "early"]
+    assert names(take(picker)) == ["late"]
     picker.inflight.clear()
-    assert clob.s08_take(picker, time.time()) is None and picker.finished
+    assert take(picker) is None and picker.finished
 
 
 @pytest.mark.parametrize(
-    "error, fatal",
+    "error, kind",
     [
-        (ProviderError(401), True),
-        (ProviderError(403), True),
-        (ProviderError(429, 5), True),
-        (ProviderError(0), False),
-        (ProviderError(502), False),
-        (ProviderError(404), False),
-        (ContractError("bad"), False),
-        (RuntimeError("bug"), True),
+        (ProviderError(401), "fatal"),
+        (ProviderError(403), "fatal"),
+        (ProviderError(429, 5), "fatal"),
+        (ProviderError(0), "transient"),
+        (ProviderError(502), "transient"),
+        (ProviderError(404), "invalid"),
+        (ProviderError(400), "invalid"),
+        (ContractError("bad"), "invalid"),
+        (RuntimeError("bug"), "fatal"),
     ],
 )
-def test_only_auth_all_exits_429_and_unknown_errors_end_the_call(error, fatal):
-    assert clob.s09_fatal(error) is fatal
+def test_auth_all_exits_429_and_unknown_errors_end_the_call_the_rest_go_on(error, kind):
+    assert dispatch.s07_kind(error) == kind
 
 
 def test_write_only_changed_prices_or_an_interval_old_and_only_newer(database):
@@ -296,7 +330,7 @@ class Response:
 def fake_prices(pool, monkeypatch, delay=0.0, answer=None):
     """Answer /prices below IPPool.request, so slots, quotas, retries and counters stay real; record
     each request's markets and catch a market sent while a request with it is still open.
-    answer(markets) may return a status or raise instead of the prices."""
+    answer(markets) may return a status or a body, or raise, instead of the prices."""
     requests_, active, overlaps = [], set(), []
     lock = threading.Lock()
 
@@ -315,6 +349,8 @@ def fake_prices(pool, monkeypatch, delay=0.0, answer=None):
             finally:
                 with lock:
                     active.difference_update(markets)
+            if isinstance(status, bytes):
+                return Response(status)
             prices = {r["token_id"]: {"BUY": "0.4", "SELL": "0.6"} for r in body}
             return Response(json.dumps(prices).encode(), status or 200)
 
@@ -351,9 +387,19 @@ def test_once_fetches_unseen_and_due_then_logs_summary(database, monkeypatch, ca
         assert stored(database, name)[2] > NOW
     assert stored(database, "fresh")[2] == NOW + timedelta(seconds=3600)
     summary = next(log for log in logs(capsys) if log["event"] == "dispatch_summary")
-    assert summary["exits"] == {
-        "default": {"requests": 4, "markets": 4, "errors": 0, "requeued": 0, "http_429": 0}
+    exits = summary["exits"]
+    assert set(exits) == {"default"} and exits["default"] | {"http_p50": 0, "http_p95": 0} == {
+        "requests": 4,
+        "markets": 4,
+        "errors": 0,
+        "requeued": 0,
+        "invalid": 0,
+        "http_429": 0,
+        "http_p50": 0,
+        "http_p95": 0,
     }
+    # Seconds of each HTTP 200 on this exit, from sending to the whole body read.
+    assert 0 <= exits["default"]["http_p50"] <= exits["default"]["http_p95"] < 1
     assert summary["fetched"] == 4 and summary["written"] == 4 and summary["all_exits_429"] == 0
     # At most 2 waiting before intake stops, plus the 4 fetches already on their way.
     assert 1 <= summary["write_queue_max"] <= 2 + 4 and summary["write_queue_full_seconds"] >= 0
@@ -406,6 +452,34 @@ def test_failed_batch_goes_back_and_dispatch_goes_on(database, monkeypatch, caps
     requeued = [log for log in records if log["event"] == "batch_requeued"]
     assert requeued == [requeued[0]] and requeued[0]["ip"] == "default"
     assert requeued[0]["markets"] == 1
+
+
+@pytest.mark.parametrize("answer", [404, b'{"unrequested-asset": {}}'])
+def test_invalid_batch_is_not_written_and_waits_an_interval(database, monkeypatch, capsys, answer):
+    pool = pool_of()
+    sent, _ = fake_prices(pool, monkeypatch, answer=lambda m: answer if m == {"r4-test-b"} else 0)
+    pickers, picker_class = [], dispatch.Picker
+
+    def capture(*args, **kwargs):
+        pickers.append(picker_class(*args, **kwargs))
+        return pickers[-1]
+
+    monkeypatch.setattr(clob, "Picker", capture)
+    before = time.time()
+    result = clob.runtime_clob(pool, stop=threading.Event(), once=True, **settings())
+    # Not retried (a 4xx or an invalid response would come back the same) and not put back.
+    assert result == Result.COMPLETE and [names(r) for r in sent].count(["b"]) == 1
+    assert stored(database, "b") is None and stored(database, "a")[2] > NOW
+    b = pickers[0].markets["r4-test-b"]
+    assert before <= b.fetched <= time.time() and b.due == b.fetched + 10
+    records = logs(capsys)
+    summary = next(log for log in records if log["event"] == "dispatch_summary")
+    assert summary["exits"]["default"]["invalid"] == 1
+    assert summary["exits"]["default"]["requeued"] == 0
+    invalid = [log for log in records if log["event"] == "batch_invalid"]
+    assert len(invalid) == 1 and invalid[0]["market_ids"] == ["r4-test-b"]
+    assert invalid[0]["ip"] == "default" and invalid[0]["markets"] == 1
+    assert invalid[0]["status"] == (404 if answer == 404 else 200)
 
 
 @pytest.mark.parametrize("status", [401, 403, 429])

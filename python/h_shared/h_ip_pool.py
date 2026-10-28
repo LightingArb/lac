@@ -198,10 +198,18 @@ class IPPool:
         self.exit_requests = [0] * len(self.addresses)
         # Failed attempts per exit label ("all" = every exit was cooling down): 429s and the rest.
         self.exit_429, self.exit_errors = Counter(), Counter()
+        # Seconds from sending to the whole body read, of each HTTP 200 per exit.
+        self.exit_seconds = [[] for _ in self.addresses]
 
     def requests_by_exit(self) -> dict[str, int]:
         """Requests admitted this round per exit, keyed by its log label."""
         return {h_exit_label(a): n for a, n in zip(self.addresses, self.exit_requests)}
+
+    def seconds_by_exit(self) -> dict[str, list[float]]:
+        """HTTP 200 response seconds per exit label since the last call (or the round start)."""
+        with self.condition:
+            taken, self.exit_seconds = self.exit_seconds, [[] for _ in self.addresses]
+        return {h_exit_label(a): s for a, s in zip(self.addresses, taken)}
 
     def report(self, *, success: int = 0, no_data: int = 0, error: int = 0) -> None:
         with self.condition:
@@ -367,6 +375,7 @@ class IPPool:
                             raise ContractError("Provider response exceeds declared byte limit")
                     with self.condition:
                         self.response_bytes += len(content)
+                        self.exit_seconds[index].append(time.monotonic() - started)
                     try:
                         return json.loads(content, parse_float=Decimal)
                     except (ValueError, UnicodeError):

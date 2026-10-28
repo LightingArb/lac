@@ -1,4 +1,5 @@
-"""The price table loses round 3's next_due and gets fillfactor 70; checked in a rolled-back transaction."""
+"""The price table loses round 3's next_due; price and book tables get fillfactor 70; checked in a
+rolled-back transaction."""
 
 from m_live import all_setup
 
@@ -43,3 +44,18 @@ def test_table_from_before_round3_only_gets_fillfactor(empty_database, capsys):
     assert all_setup.s01_migrate_price(connection)
     assert shape(connection)[2] == ["fillfactor=70"]
     assert capsys.readouterr().out == "SETUP_MIGRATED m_live.m02_clob_price fillfactor=70\n"
+
+
+def test_book_table_gets_fillfactor_once(empty_database, capsys):
+    connection = empty_database
+
+    def options():
+        return connection.execute(
+            "SELECT reloptions FROM pg_class WHERE oid='m_live.m03_clob_book'::regclass"
+        ).fetchone()[0]
+
+    connection.execute("ALTER TABLE m_live.m03_clob_book RESET (fillfactor)")
+    assert all_setup.s02_migrate_book(connection) and options() == ["fillfactor=70"]
+    assert capsys.readouterr().out == "SETUP_MIGRATED m_live.m03_clob_book fillfactor=70\n"
+    assert not all_setup.s02_migrate_book(connection) and options() == ["fillfactor=70"]
+    assert capsys.readouterr().out == ""
