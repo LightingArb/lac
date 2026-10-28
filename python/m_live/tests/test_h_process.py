@@ -547,3 +547,154 @@ def test_ip_map_slow_request_does_not_hold_completed_requests():
             release_first.set()
         assert sorted(result.result(timeout=5)) == list(range(10))
     client.close()
+
+
+def test_dispatch_refills_a_free_slot_at_once_and_takes_nothing_while_full(monkeypatch):
+    client = pool(ips=["192.0.2.1"], inflight=2)
+    release_first, active, peak = threading.Event(), Counter(), Counter()
+    lock = threading.Lock()
+    queue = list(range(12))
+    taken = []
+
+    def request(i, method, url, kwargs):
+        with lock:
+            active[i] += 1
+            peak[i] = max(peak[i], active[i])
+        if kwargs["json"] == 0:
+            assert release_first.wait(5)
+        else:
+            time.sleep(0.01)
+        with lock:
+            active[i] -= 1
+        return Response()
+
+    def take():
+        with lock:
+            assert sum(active.values()) <= 4
+        if not queue:
+            return None
+        taken.append(queue.pop(0))
+        return taken[-1]
+
+    def fetch(item):
+        return client.request("POST", "https://test/prices", body=item)
+
+    transport(monkeypatch, client, request)
+    done = threading.Event()
+    with ThreadPoolExecutor(max_workers=1) as consumer:
+        result = consumer.submit(lambda: list(client.dispatch(take, fetch, done.is_set)))
+        try:
+            # The slow first batch holds one slot; the other three keep going through the rest.
+            deadline = time.monotonic() + 2
+            while queue and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert not queue and not result.done()
+            release_first.set()
+            time.sleep(0.3)
+            assert not result.done(), "Without until(), dispatch keeps waiting for work"
+        finally:
+            release_first.set()
+            done.set()
+        assert len(result.result(timeout=5)) == 12
+    assert max(peak.values()) <= 2 and sum(client.exit_requests) == 12
+    client.close()
+
+
+def test_dispatch_stops_on_until_and_yields_exit_labels(monkeypatch):
+    client = pool(ips=["192.0.2.1"], inflight=1)
+    count = iter(range(1000))
+    stop = threading.Event()
+
+    def fetch(item):
+        if item == 5:
+            stop.set()
+        return client.request("POST", "https://test/prices", body=item)
+
+    transport(monkeypatch, client, lambda *_: Response())
+    results = list(client.dispatch(lambda: next(count), fetch, stop.is_set))
+    assert 6 <= len(results) <= 8
+    assert {label for _, _, label in results} == {"default", "192.0.2.1"}
+    assert all(result == {"value": 0.5} for _, result, _ in results)
+    client.close()
+
+
+def test_dispatch_failure_drains_in_flight_then_raises(monkeypatch):
+    client = pool(inflight=3)
+    started, finished = threading.Event(), []
+    items = iter(range(1000))
+
+    def fetch(item):
+        if item == 1:
+            assert started.wait(2)
+            raise ContractError("test contract failure")
+        started.set()
+        time.sleep(0.05)
+        finished.append(item)
+        return item
+
+    yielded = []
+    with pytest.raises(ContractError):
+        for batch, result, _ in client.dispatch(lambda: next(items), fetch, lambda: False):
+            yielded.append(result)
+    # Batches already sent finish and are handed over; nothing new starts after the failure.
+    assert sorted(yielded) == sorted(finished) and 0 in yielded and len(finished) <= 4
+
+
+def test_dispatch_keeps_quota_and_429_per_exit(monkeypatch):
+    client = pool(ips=["192.0.2.1"], inflight=1, limits={"/prices": (2, 0.5)})
+    calls = []
+    items = iter(range(1000))
+
+    def request(i, method, url, kwargs):
+        calls.append((i, time.monotonic()))
+        return Response(429, retry_after="5") if i == 1 else Response()
+
+    def fetch(item):
+        return client.request("POST", "https://test/prices", body=item)
+
+    transport(monkeypatch, client, request)
+    started = time.monotonic()
+    results = list(client.dispatch(lambda: next(items), fetch, lambda: len(calls) >= 6))
+    # 192.0.2.1 answers 429 once and cools down; its batch moves to the default exit, which
+    # keeps its own window of 2 per 0.5 s.
+    assert [i for i, _ in calls].count(1) == 1
+    assert client.exit_429 == Counter({"192.0.2.1": 1}) and not client.exit_errors
+    default = [t for i, t in calls if i == 0]
+    for first, third in zip(default, default[2:]):
+        assert third - first >= 0.45
+    assert time.monotonic() - started >= 0.9 and all(label == "default" for *_, label in results)
+    client.close()
+
+
+def test_resident_runtime_gets_stop_and_once(monkeypatch):
+    seen = []
+
+    class Stop:
+        def is_set(self):
+            return bool(seen)
+
+        def set(self):
+            pass
+
+        def wait(self, seconds):
+            pass
+
+    def runtime(ips, *, stop, once, size):
+        seen.append((stop.is_set(), once, size))
+        return Result.COMPLETE
+
+    monkeypatch.setattr(process.signal, "signal", lambda *_: None)
+    stop = Stop()
+    process.h_run(
+        runtime,
+        True,
+        Schedule(None, 0.5, 8, 5, resident=True),
+        [],
+        1,
+        {"/prices": (10, 1)},
+        HttpPolicy(1, 2, 1, 100),
+        {"size": 3},
+        stop,
+        {"sha": "test", "service": "test"},
+    )
+    assert seen == [(False, True, 3)]

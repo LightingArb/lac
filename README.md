@@ -74,9 +74,15 @@ DB_NAME=lac_data
 DB_USER=admin
 DB_PASSWORD=admin
 OUTBOUND_IPS=[]
+REFRESH_SECONDS='{"sports":60,"crypto":5,"weather":10,"default":10}'
+CLOB_INFLIGHT=32
 ```
 
 這是本機開發用的預設值，只連本機資料庫。`DB_NAME` 必須是 `lac_data`、`DB_PORT` 必須是 `5432`，程式會檢查；帳號密碼可以改成你自己的。網站的 `DB_*` 只在伺服器端使用，不會傳到瀏覽器。
+
+`REFRESH_SECONDS` 是沒有產品要求的市場多久更新一次價格（秒），JSON object：鍵是議題的 tag slug，值是正整數秒，一定要有 `default`。一個市場取它議題所有 tag 裡最快的；一個都沒對上就用 `default`（tag 本身叫 default 不算對上）。怎麼用見 §4 的需求表。缺這一行、不是 JSON、沒有 `default`、值不是正整數，資料程式啟動就失敗，什麼都不跑。和 `OUTBOUND_IPS` 一樣，整個 JSON 用單引號包起來（原因見下面）。
+
+`CLOB_INFLIGHT` 是價格 runtime 每個出口同時在途的請求數，正整數，沒寫就是 32；不是正整數一樣啟動失敗。
 
 `OUTBOUND_IPS` 是資料程式在主機預設出口以外的出口，JSON array，一項就是一個出口，兩種寫法可以混用：
 
@@ -119,7 +125,7 @@ SETUP_OK m_live tables=6
 SETUP_OK m_historical tables=1
 ```
 
-setup 可以重跑：缺的表會補上，已經存在的表會檢查欄位，不一致就報錯（不會自動遷移）。
+setup 可以重跑：缺的表會補上，已經存在的表會檢查欄位，不一致就報錯（不會自動遷移）。唯一的例外是價格表的 `next_due`：舊的 `m_live.m02_clob_price` 沒有這一欄時，m_live 的 setup 先在同一個 transaction 裡加欄位、回填（上次請求時間＋需求表的間隔；已不在需求表的用上次請求時間）、設 NOT NULL、建索引，印出 `SETUP_MIGRATED m_live.m02_clob_price next_due`，再做上面的檢查；之後重跑什麼都不改。
 
 ### 5. 啟動資料程式（終端機一）
 
@@ -130,15 +136,15 @@ uv run --env-file ../.env python -m m_live.all_runtime
 
 有 `.env.local`（例如用代理出口）時，把它接在 `.env` 後面：`uv run --env-file ../.env --env-file ../.env.local python -m m_live.all_runtime`。
 
-- 會開五個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 抓到期報價、`book` 抓到期掛單簿。後兩者有 pending 就立即續跑，完成後休息 0.5 秒；預設掛單簿間隔 300 秒。
-- 空資料庫第一次：市場與需求資料發布後 clob、book 才有標的；第一批價格與掛單簿在各自下一輪開始取得。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
+- 會開五個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 常駐抓報價，出口一有空位就補下一批，不分輪；`book` 抓到期掛單簿，有 pending 就立即續跑，完成後休息 0.5 秒；預設掛單簿間隔 300 秒。clob 每 60 秒記一筆 `dispatch_summary`（欄位見 §4 價格表）。
+- 空資料庫第一次：市場與需求資料發布後 clob、book 才有標的；clob 每 60 秒重讀一次「還沒抓過的市場」，book 在下一輪開始取得。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
 - 輸出是一行一個 JSON。`round_finished` 的 `result` 是 `complete` 才算成功。
 - 只跑一輪就結束：加 `--once`。只跑其中一個：加 `--unit recent`、`--unit full`、`--unit demand` 、`--unit clob` 或 `--unit book`。
 - 停止：`Ctrl+C`，會等目前的工作做完再結束。
 
 排程與 HTTP 設定在各模組的 `all_runtime.py`，每個 `h_process` 呼叫對應一個 runtime。`period_s` 從每輪開始起算；`rest_s`／`rest_ms` 從每輪結束起算，三者只能選一個。`not_updated` 在這兩種模式依宣告的週期／休息時間等待；`pending` 立即續跑。一般失敗等待依序為基準的 1、2、4、8 倍，成功後恢復；401／403 只暫停該 runtime 到重啟，期間持續記錯誤。
 
-四個對外請求 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的每一個出口（本機 IP 或 HTTP 代理，寫法見第 2 步）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。項目重複或格式不對，服務啟動失敗；額外 IP 必須存在於本機網卡，請求綁定來源位址；每個代理在啟動時先經它打一次 CLOB `GET /time`，不是 HTTP 200 就啟動失敗，log 寫是哪一個代理（主機與 port）。每個出口（預設、本機 IP、代理）的在途數、額度與 429 冷卻各算各的：clob 每個出口最多 16 個在途請求，book、recent、full 各最多 4 個，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該出口的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。`round_finished` 的 `exit_requests` 是這一輪每個出口送出的請求數。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
+四個對外請求 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的每一個出口（本機 IP 或 HTTP 代理，寫法見第 2 步）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。項目重複或格式不對，服務啟動失敗；額外 IP 必須存在於本機網卡，請求綁定來源位址；每個代理在啟動時先經它打一次 CLOB `GET /time`，不是 HTTP 200 就啟動失敗，log 寫是哪一個代理（主機與 port）。每個出口（預設、本機 IP、代理）的在途數、額度與 429 冷卻各算各的：clob 每個出口最多 `CLOB_INFLIGHT`（預設 32）個在途請求，book、recent、full 各最多 4 個，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該出口的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。`round_finished` 的 `exit_requests` 是這一輪每個出口送出的請求數。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
 
 **歷史價格（另一個資料終端機）。** `runtime_history` 常駐補最近 7 個完整 UTC 日，且不早於入口的 `first_day=2026-10-23`。每市場每天保存第一個結果的分鐘價格；昨天在 00:10 UTC 後才抓，最舊的天優先。Normal 只處理沒有列的 pending；成功、空日與 error 都不會自動重抓，範圍外既有列永久保留。
 
@@ -232,11 +238,12 @@ flowchart LR
 │   │   ├── all_runtime.py     # 常駐執行
 │   │   ├── sql/               # 資料表定義
 │   │   └── src/
+│   │       ├── h_settings.py                # 讀 REFRESH_SECONDS、CLOB_INFLIGHT
 │   │       ├── m01_market/
 │   │       │   ├── runtime_gamma_recent.py  # 新市場、關閉、未定案追蹤
 │   │       │   ├── runtime_gamma_full.py    # 完整議題掃描
-│   │       │   └── runtime_demand.py        # 合併產品需求
-│   │       ├── m02_price/runtime_clob.py    # 依需求到期時間抓最佳買賣價
+│   │       │   └── runtime_demand.py        # 合併產品需求與大類間隔
+│   │       ├── m02_price/runtime_clob.py    # 常駐派工，依下次到期抓最佳買賣價
 │   │       └── m03_book/runtime_book.py     # 抓第一結果的整本掛單簿
 │   └── m_historical/          # 歷史分鐘價格（UTC 日陣列、常駐）
 └── typescript/
@@ -342,7 +349,7 @@ flowchart LR
 | refresh_seconds | integer | 大於 0；要求的更新間隔（秒） |
 | book_levels | integer? | 0＝最佳買賣價；正整數＝每邊檔數；null＝整本 |
 
-產品清單在 `all_runtime.py`，目前為空。配置產品時，使用 `<PRODUCT>_DB_*` 唯讀該產品的 `m_live.m01_polymarket_demand`（condition_id、refresh_seconds、book_levels）；有要求時只在產品要求中取最短間隔、最大檔數（null 最大）。沒有要求時，議題 tags 含 slug=sports 用 60 秒，其他 10 秒，book_levels=0。某產品讀不到會記錯誤、其他產品照算；本輪需求以一個 transaction 替換，不在進行中範圍的市場移除。需求表是排程輸入，不代表已達到該新鮮度。
+產品清單在 `all_runtime.py`，目前為空。配置產品時，使用 `<PRODUCT>_DB_*` 唯讀該產品的 `m_live.m01_polymarket_demand`（condition_id、refresh_seconds、book_levels）；有要求時只在產品要求中取最短間隔、最大檔數（null 最大），不再看大類。沒有要求時照大類：設定是 `.env` 的 `REFRESH_SECONDS`（見 §2），拿議題 `tags` 每一個的 `slug` 去對設定的鍵，取對上的裡面最短的秒數；一個都沒對上用 `default`，book_levels=0。例如預設設定下，tags 有 `sports` 與 `crypto` 的市場是 5 秒，只有 `politics` 的是 10 秒（default）。改了設定要重啟服務；新的間隔在下一次需求發布（60 秒內）生效，價格表的 `next_due` 由價格 runtime 跟著重算（見下面）。某產品讀不到會記錯誤、其他產品照算；本輪需求以一個 transaction 替換，不在進行中範圍的市場移除。需求表是排程輸入，不代表已達到該新鮮度。
 
 **`m_live.m02_clob_price`**：一列＝一個市場第一個結果的最新最佳買賣價；主鍵 `market_id`，參照 `m01_market`。
 
@@ -353,12 +360,20 @@ flowchart LR
 | best_bid、best_ask | numeric? | 第一個結果的最佳買價／賣價；沒有掛單的那一邊是 null |
 | requested_at | timestamptz | 該批請求送出前的時間，作為可得時間與到期計算基準 |
 | m_live_updated_at | timestamptz | 該列寫入時間 |
+| next_due | timestamptz | 下次到期＝`requested_at + 需求表 refresh_seconds`；有索引，價格 runtime 照它排先後 |
 
 只抓需求表中恰好兩個結果、兩個結果都有 asset 的市場。第二個結果的 `best_bid = 1 - 第一個 best_ask`、`best_ask = 1 - 第一個 best_bid`；被減的值是 null，對應結果也維持 null。中間價不存表，由讀取端以 `(best_bid + best_ask) / 2` 計算，缺任一邊時為 null。
 
-`runtime_clob` 每輪優先選沒有價格列的市場，其次按 `requested_at + refresh_seconds` 最早到期排序，market_id 打破同時間的平手；最多 50,000 個。一個 `POST /prices` 請求包含 250 個市場第一個結果的 BUY／SELL，實測 BUY 對應 bid、SELL 對應 ask；API 的 bid=0、ask=1 空邊界值記為 null。每批回應立即發布，發布前重讀需求與第一結果 identity，較舊的請求不覆寫較新的列。不在需求表的市場刪除價格列；仍在需求表的舊價格保留原 requested_at，由讀取端判斷能否使用。
+`runtime_clob` 常駐，不分輪：
 
-所有請求經 IP 池，每 IP 在途 16、`/prices` 500 次／10 秒；還有到期的市場就回報 pending 立即再跑，完成後休息 0.5 秒。
+- **挑法：** 還沒抓過的市場（沒有價格列，等於 `next_due` 是 -infinity）最優先，其次按 `next_due` 最早的排；到期沒到期都挑，不等到期。沒抓過的清單啟動時讀一次，之後每 60 秒重讀；有價格的市場用 `next_due` 索引一次讀一段（在途的之後再 25,000 個），用完再讀。
+- **派工：** 每個出口（預設、本機 IP、代理）最多 `CLOB_INFLIGHT` 個在途請求（預設 32）；哪個出口一有空位，就補一批 250 個市場（一個 `POST /prices`，含每個市場第一個結果的 BUY／SELL）。慢的出口只佔住自己的位子。市場派出去時先記為在途，那批寫進資料庫後才解除，所以同一個市場不會同時在兩批裡。額度（每個出口 `/prices` 500 次／10 秒）、429 冷卻、重試照 IP 池的規則；全部出口都被 429 擋住、或某批請求重試用完仍失敗、回應不合法時，停止派新的，等在途的回來寫完，這一次就以失敗結束，照共用排程等待後重新開始。
+- **寫入：** 4 條 autocommit 連線的小池，每批回應一個 statement：發布前重讀需求與第一結果 identity，較舊的請求不覆寫較新的列，`next_due = requested_at + refresh_seconds`。價格沒變也照寫，`requested_at` 與 `next_due` 一起往後移。等著寫的批數到 16 就先不派新的請求。
+- **維護與摘要：** 每 60 秒：刪掉已不在需求表的市場的價格列；需求表的間隔變了（改設定或產品要求）的市場，把 `next_due` 重算成 `requested_at + 新間隔`，間隔沒變的不動；重讀沒抓過的市場；再記一筆 `dispatch_summary`。
+
+`dispatch_summary` 欄位：`seconds`（這段的秒數）；`exits` 每個出口的 `requests`（送出的請求，含重試）、`markets`（抓回的市場數）、`errors`（429 以外失敗的請求）、`http_429`；`all_exits_429`（全部出口都在冷卻而擋下的次數）；`groups` 每個間隔（秒）的 `markets`（需求表市場數）、`priced`（有價格列的）、`age_p50`／`age_p95`（`now() - requested_at`，秒）、`overdue`（有價格且已過 `next_due` 的）；`unseen`、`inflight`；`deleted`、`recomputed`（這次維護刪掉與重算的列數）。
+
+一個請求實測 BUY 對應 bid、SELL 對應 ask；API 的 bid=0、ask=1 空邊界值記為 null。仍在需求表的舊價格保留原 requested_at，由讀取端判斷能否使用。`--once` 時只抓沒抓過的與已到期的，每個市場最多一次，抓完就結束。
 
 **`m_live.m03_clob_book`**：一列＝一個市場第一個結果的最新整本掛單簿；主鍵 `market_id`，參照 `m01_market`。
 

@@ -7,7 +7,7 @@ import os
 import subprocess
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal
@@ -160,7 +160,8 @@ class IPPool:
 
     Every exit (default, local IP, proxy) has its own slots, endpoint quotas and 429 cooldowns,
     which persist across rounds in this runtime process only.
-    request() performs HTTP I/O; map() bounds outstanding work by total IP slots.
+    request() performs HTTP I/O; map() bounds outstanding work by total IP slots; dispatch() keeps
+    those slots busy with work taken as soon as a slot frees, without rounds.
     """
 
     def __init__(
@@ -195,6 +196,8 @@ class IPPool:
     def reset_round(self) -> None:
         self.requests = self.success = self.no_data = self.errors = self.response_bytes = 0
         self.exit_requests = [0] * len(self.addresses)
+        # Failed attempts per exit label ("all" = every exit was cooling down): 429s and the rest.
+        self.exit_429, self.exit_errors = Counter(), Counter()
 
     def requests_by_exit(self) -> dict[str, int]:
         """Requests admitted this round per exit, keyed by its log label."""
@@ -305,6 +308,9 @@ class IPPool:
         error.context = context | extra
         h_log(self.unit, "request_error", **(error.context | {"reason": reason}))
         error.logged = True
+        with self.condition:
+            counter = self.exit_429 if error.context.get("status") == 429 else self.exit_errors
+            counter[error.context.get("ip") or "round"] += 1
 
     def request(self, method: str, url: str, *, params=None, body=None, target=None):
         endpoint = self.endpoint(url)
@@ -409,6 +415,53 @@ class IPPool:
             finally:
                 for future in pending:
                     future.cancel()
+
+    def dispatch(self, take, fetch, until):
+        """Keep every slot busy without rounds; yield (batch, result, exit label) as fetches end.
+
+        Whenever a slot is free and until() is false, take() gives the next batch (None: nothing to
+        send right now). A slow exit only holds its own slots. The first failed fetch stops intake;
+        what is still in flight finishes and is yielded, then that failure is raised.
+        """
+        from concurrent.futures import FIRST_COMPLETED, wait
+
+        workers = len(self.addresses) * self.ip_inflight
+
+        def call(batch):
+            try:
+                result = fetch(batch)
+            except ContractError as error:
+                self.log_error(error)
+                raise
+            return batch, result, getattr(self.local, "context", {}).get("ip")
+
+        failure = None
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            pending = set()
+            try:
+                while True:
+                    while failure is None and len(pending) < workers and not until():
+                        batch = take()
+                        if batch is None:
+                            break
+                        pending.add(executor.submit(call, batch))
+                    if not pending:
+                        if failure is not None or until():
+                            break
+                        time.sleep(0.05)
+                        continue
+                    done, _ = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        pending.remove(future)
+                        if future.exception() is not None:
+                            failure = failure or future.exception()
+                            continue
+                        yield future.result()
+            finally:
+                for future in pending:
+                    future.cancel()
+        if failure is not None:
+            raise failure
 
     def close(self) -> None:
         for session in self.sessions:

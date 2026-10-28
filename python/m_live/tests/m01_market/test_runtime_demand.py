@@ -1,11 +1,16 @@
 import copy
 import json
+import os
+import subprocess
+import sys
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
+import pytest
 
+from m_live.src.h_settings import h_clob_inflight, h_refresh_seconds
 from m_live.src.m01_market import runtime_demand as demand
 from m_live.src.m01_market import runtime_gamma_full as full
 
@@ -45,15 +50,91 @@ def test_publish_defaults_requests_and_retire(monkeypatch, empty_database):
             (source["id"],),
         ).fetchone()
 
-    demand.c02_publish({}, 60, 10)
+    def tags(*slugs):
+        connection.execute(
+            "UPDATE m_live.m01_event SET tags=%s WHERE event_id=%s",
+            (json.dumps([{"id": str(i), "slug": s} for i, s in enumerate(slugs)]), event["id"]),
+        )
+
+    demand.c02_publish({}, REFRESH)
     assert published() == (60, 0)
-    connection.execute("UPDATE m_live.m01_event SET tags='[]' WHERE event_id=%s", (event["id"],))
-    demand.c02_publish({}, 60, 10)
+    # Several matching tags: the fastest one; no matching tag: default.
+    tags("sports", "crypto", "politics")
+    demand.c02_publish({}, REFRESH)
+    assert published() == (5, 0)
+    tags("politics", "weather")
+    demand.c02_publish({}, REFRESH)
     assert published() == (10, 0)
-    demand.c02_publish({source["conditionId"]: (3, None)}, 60, 10)
+    tags("politics", "default")
+    demand.c02_publish({}, REFRESH | {"default": 30})
+    assert published() == (30, 0)
+    tags()
+    demand.c02_publish({}, REFRESH)
+    assert published() == (10, 0)
+    # A product request replaces the category interval (the shortest among products).
+    tags("crypto")
+    demand.c02_publish({source["conditionId"]: (3, None)}, REFRESH)
     assert published() == (3, None)
+    demand.c02_publish({source["conditionId"]: (20, 4)}, REFRESH)
+    assert published() == (20, 4)
     connection.execute(
         "UPDATE m_live.m01_market SET closed=true WHERE market_id=%s", (source["id"],)
     )
-    demand.c02_publish({}, 60, 10)
+    demand.c02_publish({}, REFRESH)
     assert published() is None
+
+
+REFRESH = {"sports": 60, "crypto": 5, "weather": 10, "default": 10}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "not json",
+        "[60]",
+        '{"sports": 60}',
+        '{"default": 0}',
+        '{"default": 10, "crypto": -5}',
+        '{"default": 10, "crypto": 2.5}',
+        '{"default": 10, "crypto": "5"}',
+        '{"default": true}',
+    ],
+)
+def test_bad_refresh_seconds_stop_the_service(monkeypatch, capsys, value):
+    if value is None:
+        monkeypatch.delenv("REFRESH_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("REFRESH_SECONDS", value)
+    with pytest.raises(SystemExit) as caught:
+        h_refresh_seconds()
+    assert caught.value.code == 1
+    log = json.loads(capsys.readouterr().out)
+    assert log["event"] == "configuration_error" and "REFRESH_SECONDS" in log["reason"]
+
+
+def test_refresh_seconds_and_clob_inflight_settings(monkeypatch):
+    monkeypatch.setenv("REFRESH_SECONDS", json.dumps(REFRESH))
+    assert h_refresh_seconds() == REFRESH
+    monkeypatch.delenv("CLOB_INFLIGHT", raising=False)
+    assert h_clob_inflight() == 32
+    monkeypatch.setenv("CLOB_INFLIGHT", "16")
+    assert h_clob_inflight() == 16
+    for value in ("0", "-1", "many"):
+        monkeypatch.setenv("CLOB_INFLIGHT", value)
+        with pytest.raises(SystemExit):
+            h_clob_inflight()
+
+
+def test_bad_setting_stops_module_before_any_runtime_starts():
+    result = subprocess.run(
+        [sys.executable, "-m", "m_live.all_runtime", "--once"],
+        check=False,
+        env=os.environ | {"REFRESH_SECONDS": '{"sports": 60}'},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 1
+    assert '"configuration_error"' in result.stdout and "REFRESH_SECONDS" in result.stdout
+    assert '"started"' not in result.stdout

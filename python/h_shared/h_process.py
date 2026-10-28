@@ -36,6 +36,8 @@ class Schedule:
     rest_s: float | None
     backoff_max: int
     auth_log_s: float
+    # Resident: one call keeps working until the stop signal (or a failure); it gets stop and once.
+    resident: bool = False
 
 
 @dataclass
@@ -67,11 +69,14 @@ def h_process(
     period_s: float | None = None,
     rest_s: float | None = None,
     rest_ms: float | None = None,
+    resident: bool = False,
     **parameters,
 ) -> Child:
     """Start one child; each invocation passes IPPool and declared parameters to runtime.
 
     period_s measures from round start; rest_s/rest_ms measure from round end.
+    A resident runtime also gets stop (set on the stop signal) and once; one invocation returns when
+    stop is set, or raises on a failure, which then waits like a failed round.
     Validation failures stop the complete service before further children can start.
     """
     ip_limit = {} if ip_limit is None else ip_limit
@@ -113,7 +118,7 @@ def h_process(
         args=(
             runtime,
             once,
-            Schedule(period_s, rest, backoff_max, auth_log_s),
+            Schedule(period_s, rest, backoff_max, auth_log_s, resident),
             addresses,
             ip_inflight,
             ip_limit,
@@ -195,7 +200,10 @@ def h_run(
             rate_wait = policy.rate_wait
             pause_context = {"target": "runtime", "provider": None, "ip": None, "status": None}
             try:
-                result = runtime(ips, **parameters)
+                if schedule.resident:
+                    result = runtime(ips, stop=stopped, once=once, **parameters)
+                else:
+                    result = runtime(ips, **parameters)
                 if not isinstance(result, Result):
                     raise TypeError("Runtime must return one of the six Result values")
             except ProviderError as error:

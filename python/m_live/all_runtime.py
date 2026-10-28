@@ -2,6 +2,7 @@ import argparse
 
 from h_shared.h_ip_pool import h_outbound_ips
 from h_shared.h_process import h_process, h_wait
+from m_live.src.h_settings import h_clob_inflight, h_refresh_seconds
 from m_live.src.m01_market.runtime_demand import runtime_demand
 from m_live.src.m01_market.runtime_gamma_full import runtime_gamma_full
 from m_live.src.m01_market.runtime_gamma_recent import runtime_gamma_recent
@@ -16,6 +17,8 @@ def all_runtime() -> None:
         "--unit", choices=("recent", "full", "demand", "clob", "book", "all"), default="all"
     )
     args = parser.parse_args()
+    # Interval per tag slug and CLOB in-flight per exit: a bad value stops before anything starts.
+    REFRESH_SECONDS, CLOB_INFLIGHT = h_refresh_seconds(), h_clob_inflight()
     # Each proxy exit must reach the CLOB before any runtime starts.
     OUTBOUND_IPS = h_outbound_ips(check_url="https://clob.polymarket.com/time", check_timeout=30)
     # https://docs.polymarket.com/api-reference/rate-limits
@@ -82,8 +85,7 @@ def all_runtime() -> None:
                 auth_log_s=60,
                 max_response_bytes=64 * 1024 * 1024,
                 products=[],
-                sports_seconds=60,
-                other_seconds=10,
+                refresh_seconds=REFRESH_SECONDS,
                 read_batch=1000,
             )
         )
@@ -92,9 +94,10 @@ def all_runtime() -> None:
             h_process(
                 runtime_clob,
                 once=args.once,
+                resident=True,
                 rest_ms=500,
                 ips=OUTBOUND_IPS,
-                ip_inflight=16,
+                ip_inflight=CLOB_INFLIGHT,
                 ip_limit={"/prices": (500, 10)},
                 timeout=30,
                 retries=2,
@@ -103,8 +106,10 @@ def all_runtime() -> None:
                 auth_log_s=60,
                 max_response_bytes=64 * 1024 * 1024,
                 request_items=250,
-                max_markets=50000,
-                max_pending_writes=8,
+                refill_batches=100,
+                writers=4,
+                max_pending_writes=16,
+                summary_seconds=60,
             )
         )
     if args.unit in ("book", "all"):

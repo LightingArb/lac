@@ -1,5 +1,6 @@
 """Read product demand without writes to products; atomically publish ongoing markets."""
 
+import json
 import os
 
 import psycopg
@@ -14,13 +15,15 @@ def runtime_demand(
     ips: IPPool,
     *,
     products: list[str],
-    sports_seconds: int,
-    other_seconds: int,
+    refresh_seconds: dict[str, int],
     read_batch: int,
 ) -> Result:
-    """Use product public tables and current market metadata; no external HTTP."""
+    """Use product public tables and current market metadata; no external HTTP.
+
+    refresh_seconds maps event tag slugs to intervals, with "default" for markets with none of them.
+    """
     demands, errors = c01_products(products, read_batch)
-    count = c02_publish(demands, sports_seconds, other_seconds)
+    count = c02_publish(demands, refresh_seconds)
     c03_report(ips, count, errors, len(demands))
     return Result.COMPLETE
 
@@ -75,25 +78,31 @@ def s01_read(product: str, batch: int) -> list[tuple]:
     return rows
 
 
-def c02_publish(demands: dict[str, tuple[int, int | None]], sports: int, other: int) -> int:
+def c02_publish(demands: dict[str, tuple[int, int | None]], refresh: dict[str, int]) -> int:
     conditions = sorted(demands)
     with h_connect() as connection:
         connection.execute("DELETE FROM m_live.m01_demand_market")
+        # Without a product request: the fastest interval among the event's tag slugs, else "default".
         result = connection.execute(
-            """INSERT INTO m_live.m01_demand_market (market_id, refresh_seconds, book_levels)
+            """WITH config AS (SELECT %s::jsonb AS seconds)
+            INSERT INTO m_live.m01_demand_market (market_id, refresh_seconds, book_levels)
             SELECT m.market_id,
                 CASE WHEN d.condition_id IS NOT NULL THEN d.refresh_seconds
-                     WHEN e.tags @> '[{"slug":"sports"}]'::jsonb THEN %s ELSE %s END,
+                     ELSE coalesce(
+                        (SELECT min((c.seconds ->> (t ->> 'slug'))::integer)
+                         FROM jsonb_array_elements(e.tags) AS t
+                         WHERE t ->> 'slug' <> 'default' AND c.seconds ? (t ->> 'slug')),
+                        (c.seconds ->> 'default')::integer) END,
                 CASE WHEN d.condition_id IS NOT NULL THEN d.book_levels ELSE 0 END
             FROM m_live.m01_market AS m
             JOIN m_live.m01_event AS e ON e.event_id=m.event_id
+            CROSS JOIN config AS c
             LEFT JOIN unnest(%s::text[], %s::integer[], %s::integer[])
                 AS d(condition_id,refresh_seconds,book_levels) ON d.condition_id=m.condition_id
             WHERE m.in_current_scan AND m.active AND NOT m.closed AND NOT m.archived
               AND e.in_current_scan AND e.active AND NOT e.closed AND NOT e.archived""",
             (
-                sports,
-                other,
+                json.dumps(refresh),
                 conditions,
                 [demands[c][0] for c in conditions],
                 [demands[c][1] for c in conditions],
