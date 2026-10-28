@@ -83,11 +83,13 @@ OUTBOUND_IPS=[]
 - **本機網卡上的 IP**，例如 `["203.0.113.5"]`：這個出口的請求綁定這個來源位址。
 - **HTTP 代理** `http://帳號:密碼@主機:port`，例如 `["http://user:pass@198.51.100.7:50100"]`：這個出口的請求都經過這個代理。只支援 `http://`（HTTPS 網站也是經它轉送）。
 
-Git 裡的 `.env` 維持 `OUTBOUND_IPS=[]`。repo 是公開的，代理清單含帳密，所以真正的清單放在根目錄的 `.env.local`：它列在 `.gitignore`，不會進 Git；只寫要蓋過去的那一行，例如：
+Git 裡的 `.env` 維持 `OUTBOUND_IPS=[]`。repo 是公開的，代理清單含帳密，所以真正的清單放在根目錄的 `.env.local`：它列在 `.gitignore`，不會進 Git；只寫要蓋過去的那一行，整個 JSON 用單引號包起來，例如：
 
 ```dotenv
-OUTBOUND_IPS=["http://user:pass@198.51.100.7:50100","http://user:pass@198.51.100.8:50100"]
+OUTBOUND_IPS='["http://user:pass@198.51.100.7:50100","http://user:pass@198.51.100.8:50100"]'
 ```
+
+單引號不能省：`uv run --env-file` 讀檔時會拿掉沒包起來的雙引號，程式就收到不合法的 JSON 而啟動失敗；包起來之後 uv 與 systemd 讀到的都是原本的 JSON。陣列裡有本機 IP 時也一樣。
 
 程式只讀環境變數，不自己找設定檔；`.env.local` 由啟動的地方在 `.env` 之後載入，有就蓋過去：手動跑時多加 `--env-file ../.env.local`（見第 5 步），systemd 服務檔已經寫好「有 `.env.local` 就接著載入」。log 與錯誤訊息只寫代理的主機與 port，不寫帳密。換出口、加減出口只改這一行，不改程式。
 
