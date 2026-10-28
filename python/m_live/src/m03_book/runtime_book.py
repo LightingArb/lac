@@ -26,7 +26,9 @@ def runtime_book(
     """Resident: until stop is set, fill every free exit slot with up to request_items markets
     whose book is due (never fetched first); with none due, look again after due_wait seconds.
     Interval: book_seconds for book_levels=0, else the demand's refresh_seconds. Every response is
-    written. once: never-fetched and due markets once each, then return.
+    written. At start, books without a row or already due come due at random within one interval
+    (no wave every interval); markets added later come first. once: never-fetched and due markets
+    once each, then return.
 
     Failed batches, the end of a call and the summary as in h_dispatch. Every summary_seconds:
     delete books no longer demanded, reload the demand table into the schedule, log
@@ -34,7 +36,7 @@ def runtime_book(
     """
     return h_dispatch(
         ips,
-        Picker("runtime_book", request_items, once, due_wait),
+        Picker("runtime_book", request_items, once, due_wait, spread=not once),
         stop=stop,
         maintain=partial(c01_maintain, book_seconds=book_seconds),
         fetch=partial(s02_refresh, ips),

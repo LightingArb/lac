@@ -4,6 +4,7 @@ import copy
 import json
 import threading
 import time
+from collections import Counter
 from concurrent.futures import Future
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
@@ -264,6 +265,36 @@ def test_reload_adds_drops_changes_intervals_and_deletes_rows(database):
     assert names(dispatch.s05_take(picker, time.time())) == ["a", "b", "new", "early", "null"]
 
 
+def test_start_spreads_unseen_and_due_books_over_one_interval_new_ones_later_come_first(database):
+    picker = dispatch.Picker("runtime_book", 10, False, 0.5, spread=True)
+    before = time.time()
+    book.c01_maintain(picker, book_seconds=300)
+    after = time.time()
+    markets = {name: picker.markets["r7-" + name] for name in names(picker.markets)}
+    # No row (a, b) or already due (early, late, null): now + up to one interval, last fetch kept.
+    for name in ("a", "b", "early", "late", "null"):
+        market = markets[name]
+        assert before <= market.due <= after + market.seconds
+    assert markets["a"].fetched is None
+    assert markets["early"].fetched == pytest.approx((NOW - timedelta(seconds=350)).timestamp())
+    # Not due yet (fresh): its last request + interval, as before.
+    assert markets["fresh"].due == pytest.approx(markets["fresh"].fetched + 300)
+    assert dispatch.s05_take(picker, before - 1) is None
+    # Only the first load spreads: a market added later is taken first.
+    add_market(database, "new")
+    assert book.c01_maintain(picker, book_seconds=300)["added"] == 1
+    assert names(dispatch.s05_take(picker, before)) == ["new"]
+
+
+def test_start_spread_is_even_over_the_interval():
+    picker = dispatch.Picker("runtime_book", 10, False, 0.5, spread=True)
+    before = time.time()
+    dispatch.h_merge(picker, [(f"m{i}", f"m{i}-0", 300, None) for i in range(4000)])
+    quarters = Counter(min(int((m.due - before) // 75), 3) for m in picker.markets.values())
+    # 1,000 expected per quarter of the interval; 860 is five standard deviations below.
+    assert min(quarters[q] for q in range(4)) > 860
+
+
 def test_publication_identity_demand_newer_and_exact_decimal(database):
     source = response("r7-a-0") | {
         "bids": [{"price": "0.123456789123456789", "size": "123456789.123456789"}]
@@ -372,6 +403,11 @@ def capture_pickers(monkeypatch):
     return pickers
 
 
+def spread_to(monkeypatch, part):
+    """Fix the start spread: a book due at start comes due at now + part(its interval)."""
+    monkeypatch.setattr(dispatch.random, "uniform", lambda low, high: part(high))
+
+
 def test_once_fetches_unseen_and_due_once_then_logs_summary(database, monkeypatch, capsys):
     pool = pool_of()
     sent = fake_books(pool, monkeypatch)
@@ -399,9 +435,11 @@ def test_once_fetches_unseen_and_due_once_then_logs_summary(database, monkeypatc
     assert summary["unseen"] == summary["inflight"] == 0 and pool.success == 5
 
 
-def test_resident_fetches_only_due_books_until_stopped(database, monkeypatch):
+def test_resident_spreads_due_books_at_start_and_fetches_only_due_ones(database, monkeypatch):
     pool = pool_of()
     sent = fake_books(pool, monkeypatch)
+    # Books due at start come due a whole interval later if it is 300 s, else right away.
+    spread_to(monkeypatch, lambda seconds: seconds if seconds == 300 else 0)
     stop = threading.Event()
     timer = threading.Timer(1, stop.set)
     timer.start()
@@ -410,10 +448,11 @@ def test_resident_fetches_only_due_books_until_stopped(database, monkeypatch):
     finally:
         timer.cancel()
     assert result == Result.COMPLETE
-    # Within a second nothing is due again (the shortest interval is 10 s): each due book once,
-    # fresh (due in 200 s) and the non-binary or undemanded markets never.
+    # Within a second nothing is due again (the shortest interval is 10 s): late and null once;
+    # a, b and early (spread 300 s ahead), fresh (due in 200 s) and the non-binary or undemanded
+    # markets never.
     fetched = sorted(m for r in sent for m in names(r))
-    assert fetched == ["a", "b", "early", "late", "null"]
+    assert fetched == ["late", "null"]
 
 
 def test_failed_batch_goes_back_and_dispatch_goes_on(database, monkeypatch, capsys):
@@ -435,6 +474,33 @@ def test_failed_batch_goes_back_and_dispatch_goes_on(database, monkeypatch, caps
     assert summary["exits"]["default"]["requeued"] == 1
     assert summary["exits"]["default"]["invalid"] == 0
     assert [log["markets"] for log in records if log["event"] == "batch_requeued"] == [1]
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "reason"),
+    [
+        (requests.exceptions.ProxyError, 0, "ProxyError"),
+        (requests.exceptions.ReadTimeout, 0, "ReadTimeout"),
+        (502, 502, "HTTP 502"),
+    ],
+)
+def test_requeued_batch_logs_what_the_last_attempt_failed_on(
+    database, monkeypatch, capsys, failure, status, reason
+):
+    pool, failures = pool_of(retries=0), []
+
+    def answer(markets):
+        if markets == {"r7-b"} and not failures:
+            failures.append(1)
+            if failure == 502:
+                return 502
+            raise failure("test failure")
+
+    fake_books(pool, monkeypatch, answer)
+    result = book.runtime_book(pool, stop=threading.Event(), once=True, **settings())
+    assert result == Result.COMPLETE
+    requeued = [log for log in logs(capsys) if log["event"] == "batch_requeued"]
+    assert [(log["status"], log["reason"]) for log in requeued] == [(status, reason)]
 
 
 @pytest.mark.parametrize("answer", [400, [SOURCE | {"asset_id": "r7-early-0", "hash": None}]])
@@ -462,6 +528,7 @@ def test_slot_frees_when_http_returns_and_books_stay_in_flight_until_written(
 ):
     pool = pool_of(inflight=1)
     sent = fake_books(pool, monkeypatch)
+    spread_to(monkeypatch, lambda seconds: 0)
     pickers = capture_pickers(monkeypatch)
     release, writes, results = threading.Event(), [], []
     publish = book.s08_publish
@@ -499,6 +566,7 @@ def test_slot_frees_when_http_returns_and_books_stay_in_flight_until_written(
 def test_database_error_ends_the_call_as_an_error(database, monkeypatch, capsys):
     pool = pool_of()
     fake_books(pool, monkeypatch)
+    spread_to(monkeypatch, lambda seconds: 0)
 
     def fail(connection, rows):
         raise psycopg.OperationalError("test database failure")

@@ -156,7 +156,7 @@ def test_both_routes_store_jsonb_and_nullable_values(database, monkeypatch, clie
         )
         assert (
             full.runtime_gamma_full(
-                client, page_size=100, max_pages=2, write_batch=100, transaction_events=1
+                client, page_size=100, max_pages=2, write_batch=100, transaction_markets=1
             )
             == Result.COMPLETE
         )
@@ -275,7 +275,7 @@ def seed_game(
         row, results = full.s02_market(source, event_id, 0, NOW, sports=sports)
         markets.append(row)
         outcomes.extend(results)
-    full.c02_publish([full.s01_event(event, NOW)], markets, outcomes, 100, transaction_events=1)
+    full.c02_publish([full.s01_event(event, NOW)], markets, outcomes, 100, transaction_markets=1)
     return event
 
 
@@ -328,7 +328,7 @@ def test_game_follow_final_score_only_without_events(
     database, monkeypatch, client, capsys, initial_ended
 ):
     seed_game(database, "game-final", ["ma-z", "ma-a"], ended=initial_ended)
-    full.c02_publish([], [], [], 100, datetime.now(UTC) + timedelta(days=1), transaction_events=1)
+    full.c02_publish([], [], [], 100, datetime.now(UTC) + timedelta(days=1), transaction_markets=1)
     before = database.execute(
         "SELECT slug,teams,sport,in_current_scan,closed FROM m_live.m01_event WHERE event_id='game-final'"
     ).fetchone()

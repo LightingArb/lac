@@ -42,7 +42,7 @@ def test_publish_defaults_requests_and_retire(monkeypatch, empty_database):
     source["updatedAt"] = event["updatedAt"]
     now = datetime.now(UTC)
     row, outcomes = full.s02_market(source, event["id"], 2, now)
-    full.c02_publish([full.s01_event(event, now)], [row], outcomes, 100, transaction_events=1)
+    full.c02_publish([full.s01_event(event, now)], [row], outcomes, 100, transaction_markets=1)
 
     def published():
         return connection.execute(

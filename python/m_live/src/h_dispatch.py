@@ -5,6 +5,7 @@ connections, and every period: maintenance and one dispatch_summary."""
 
 import bisect
 import heapq
+import random
 import threading
 import time
 from collections import Counter, defaultdict
@@ -15,6 +16,7 @@ from functools import partial
 from queue import Queue
 
 import psycopg
+import requests
 
 from h_shared.h_db import h_connect
 from h_shared.h_ip_pool import ContractError, IPPool, ProviderError, h_exit_label
@@ -40,12 +42,15 @@ class Picker:
     due_wait None: take the earliest markets, due or not (prices); seconds: due markets only, and
     when none is due look again after that long (books).
     once: due markets only, each at most once per call.
+    spread: the first merge puts never-fetched and due markets at a random time within one
+    interval from now, so they do not all come due together again every interval (books).
     """
 
     unit: str
     size: int
     once: bool
     due_wait: float | None = None
+    spread: bool = False
     markets: dict = field(default_factory=dict)
     heap: list = field(default_factory=list)
     inflight: set = field(default_factory=set)
@@ -101,16 +106,21 @@ def h_dispatch(
 
 def h_merge(picker: Picker, demand: list[tuple]) -> dict[str, int]:
     """demand: (market_id, asset, interval, stored requested_at in epoch seconds or None). Add new
-    markets (due: stored requested_at + interval, -inf without a stored row), drop the ones no
-    longer demanded, move a market whose interval changed to its last fetch + new interval."""
+    markets (due: stored requested_at + interval, -inf without a stored row; spread on the first
+    merge: those already due at now + a random part of the interval), drop the ones no longer
+    demanded, move a market whose interval changed to its last fetch + new interval."""
     added = changed = 0
+    now = time.time()
     with picker.lock:
         markets, seen = picker.markets, set()
+        spread, picker.spread = picker.spread, False
         for market_id, asset, seconds, requested in demand:
             seen.add(market_id)
             market = markets.get(market_id)
             if market is None:
                 due = float("-inf") if requested is None else requested + seconds
+                if spread and due <= now:
+                    due = now + random.uniform(0, seconds)
                 market = markets[market_id] = Market(asset, seconds, requested, due)
                 added += 1
             else:
@@ -371,7 +381,7 @@ def s08_requeue(picker: Picker, batch: list[tuple[str, str]], exit_label: str, e
         "batch_requeued",
         ip=exit_label,
         status=getattr(error, "context", {}).get("status"),
-        reason=str(error),
+        reason=s13_reason(error),
         markets=len(batch),
     )
 
@@ -438,3 +448,13 @@ def s12_collect(pending: dict, picker: Picker, *, block: bool) -> None:
                     heapq.heappush(picker.heap, (market.due, market_id))
     for future in done:
         future.result()
+
+
+def s13_reason(error: Exception) -> str:
+    """What the last attempt failed on: the requests exception behind a status 0 (ProxyError,
+    ReadTimeout, ...; IPPool raises it from None, so it stays the context), else HTTP status."""
+    if not isinstance(error, ProviderError):
+        return type(error).__name__
+    if error.status == 0 and isinstance(error.__context__, requests.RequestException):
+        return type(error.__context__).__name__
+    return f"HTTP {error.status}"

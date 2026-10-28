@@ -69,7 +69,7 @@ def all_runtime() -> None:
                 page_size=100,
                 max_pages=1000,
                 write_batch=1000,
-                transaction_events=1000,
+                transaction_markets=5000,
             )
         )
     if args.unit in ("demand", "all"):

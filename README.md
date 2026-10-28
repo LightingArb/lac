@@ -262,7 +262,7 @@ flowchart LR
 - 資料程式從 Polymarket 公開 API 抓資料、清洗後寫進 PostgreSQL 資料庫 `lac_data`。這些表是 `m_api` 的資料來源；**A 組不直接連資料庫**，只透過 §6 的 HTTP 介面取得資料。`m_api` 回傳的 JSON 欄位與這裡同名、同義，不用再清洗。
 - **更新頻率：** 新市場、近期關閉、未定案追蹤與需求每 60 秒；進行中議題全掃每 600 秒。報價依需求表的 10／60 秒或產品指定間隔挑選到期市場；容量不足時延後，不能把要求間隔當成新鮮度保證；整本掛單簿預設每 300 秒，產品要求深度時依需求間隔；歷史每分鐘一格、每日一列，常駐補最近 7 個完整 UTC 日。
 - **Gamma 掃描：** 明列 v1、v2 與每次唯一的 query 參數（避開快取的實測做法，官方未承諾）。新市場分開掃開放／關閉，另掃 closedTime；各以下界最新資料時間減 120 秒重疊，該時間為空時從本輪開始前 1 小時掃起，每條最多 20 頁。達上限記 warning、發布已取得資料；已知但未在全掃內的開放市場與 closed 未定案者，每輪最多 1,000 個、每批 100 個輪替追蹤，輪替位置只留記憶體。議題標籤每批最多 100 個補查；體育議題缺少完整比賽欄位時共用這次查詢，只有已附完整標籤與市場清單、卻缺比賽欄位的體育議題才另外加入補查。體育比賽另有獨立的追蹤集合與記憶體游標，每輪最多 500 個議題，不佔一般市場追蹤的 1,000 個名額。條件是 sports 議題、ended 不是 true、底下至少一個已關閉市場；用最早的 closed_time 限定 24 小時內，無可用 closed_time 就不納入。每個議題只選 market_id 最小的已關閉市場，每批 100 個呼叫 /markets，直接讀附帶議題的比賽欄位，不查 /events、不更新 teams 或 sport。ended=true 或最早關閉已超過 24 小時就停止。參數 game_follow_hours=24 與 game_follow_max=500 在 all_runtime。
-- **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描先全部掃完才寫（沒掃完不發布），寫入時每 1,000 個議題（連同底下的市場與 outcomes）一個 transaction，議題 → 市場各照編號上鎖；全部寫完後再用一個短 transaction 撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。寫到一半失敗時已寫的留著、這次不撤下，下一次全掃補上。全掃寫入的那幾分鐘，讀的人可能看到一部分議題已更新、一部分還沒。`published` log 有 `transactions`（含撤下那一個）、`longest_transaction_seconds`、`write_seconds`（整段寫入）。identity 與結算永久保留。
+- **同時寫入：** 兩個 Gamma runtime 只接受不比既有 source_updated_at 舊的回應；市場與 outcomes 同一 transaction 發布。完整掃描先全部掃完才寫（沒掃完不發布），寫入時照議題編號一個一個放進 transaction（連同底下的市場與 outcomes），一個 transaction 最多 5,000 個市場（入口的 `transaction_markets`）：放不下的議題換下一個 transaction；一個議題超過 5,000 個市場時拆到連續幾個 transaction，議題那一列放在第一個。每個 transaction 議題 → 市場各照編號上鎖；全部寫完後再用一個短 transaction 撤下未出現在掃描結果、且掃描開始前已存在的現況列，保留掃描期間 recent 發布的新增列。寫到一半失敗時已寫的留著、這次不撤下，下一次全掃補上。全掃寫入的那幾分鐘，讀的人可能看到一部分議題已更新、一部分還沒。`published` log 有 `transactions`（含撤下那一個）、`longest_transaction_seconds`、`write_seconds`（整段寫入）、`largest_event_markets`（最大的議題有幾個市場）。identity 與結算永久保留。
 - **結算：** resolution_status 原樣存 v1 的 umaResolutionStatus 或 v2 的 resolutionStatus；只有 resolved 才寫各 outcome 的 resolved_price，包含 0.5／0.5。closed 或 1／0 價格本身不代表定案。resolved_seen_at 是 Web 首次看到 resolved 的時間，只寫一次；這是 Gamma 回報的結算，沒有宣稱鏈上付款已驗證。
 - **體育比賽資料：** 以議題的 `sports` 標籤辨識，full 與 recent 都按 Polymarket 原值保存。比賽中的比分跟隨 600 秒全掃；比賽／市場關閉後由 recent 在上述追蹤窗口內補到來源回報的結束狀態，資料永久保留。比賽結束後 Polymarket 再改的 period（例如 End Q4 → VFT）與球隊戰績不再由這條補追更新；比分與 ended 以追到的那次為準，超過窗口仍缺 ended 時不能宣稱已取得最終比分。比分倒退也照存，不修正、不推論勝負；缺少或 JSON null 存 SQL null，文字空字串保留，缺省布林不當 false。非體育議題及其市場的體育欄位是 null。`ended` 缺省代表來源未提供，不宣稱已取得最終比分；不另存無可靠來源的原訂開賽時間。
 - **Gamma IP 額度：** 每 IP 在途 4；recent 的 markets 300／10 秒、events 100／10 秒，full 的 events 400／10 秒；keyset 算在同名列表額度內。來源：[Polymarket Rate Limits](https://docs.polymarket.com/api-reference/rate-limits)。demand 沒有 HTTP 額度，也不能發出 HTTP。
@@ -372,7 +372,7 @@ flowchart LR
 - **挑法：** 每次從記憶體取最早的 250 個，到期沒到期都取，不等到期；正在途中的不取。
 - **派工：** 每個出口（預設、本機 IP、代理）最多 `CLOB_INFLIGHT` 個在途請求（預設 32）；哪個出口一有空位，就補一批 250 個市場（一個 `POST /prices`，含每個市場第一個結果的 BUY／SELL）。慢的出口只佔住自己的位子。出口的位子在 HTTP 回來（或失敗）時就空出來，不等寫入；那批的市場則維持「在途」到寫完才解除，所以同一個市場不會同時在兩批裡。額度（每個出口 `/prices` 500 次／10 秒）、429 冷卻、重試照 IP 池的規則。
 - **失敗分兩種，派工都繼續：**
-  - **換個出口或等一下可能就好的**（ProxyError、逾時、連線錯誤、5xx；重試用完還失敗）：放回去。那批的市場解除在途、下次該抓的時間不動（之後照順序再被取到），那個出口記一次 `requeued`，log 一筆 `batch_requeued`。
+  - **換個出口或等一下可能就好的**（ProxyError、逾時、連線錯誤、5xx；重試用完還失敗）：放回去。那批的市場解除在途、下次該抓的時間不動（之後照順序再被取到），那個出口記一次 `requeued`，log 一筆 `batch_requeued`（出口、HTTP 狀態、市場數；`reason` 是最後一次失敗真的原因，例如 `ProxyError`、`ReadTimeout`、`HTTP 502`）。
   - **重抓也會一樣的**（回應不合法、401／403／429 以外的 4xx；不重試）：那批的市場照「抓過了」處理，下次該抓的時間＝這次請求時間＋間隔，不寫資料庫；那個出口記一次 `invalid`，log 一筆 `batch_invalid`（出口、HTTP 狀態、原因、市場數、前 5 個 `market_id`）。
   - 只有 401／403、全部出口都被 429 擋住、資料庫錯誤（log `database_error`）、設定錯誤才讓這次結束，照共用排程等待後重新開始；結束前停止派新的，等在途的回來寫完。
 - **少寫：** 4 條 autocommit 連線的小池，每批回應一個 statement。一個市場只在「買價或賣價跟表裡不一樣（含有變沒有）」「表裡的 `requested_at` 到這次請求已經滿一個間隔」或「表裡還沒有這個市場」時才寫；寫入前重讀需求與第一結果 identity，較舊的請求不覆寫較新的列。等著寫的批數到 16 就先不派新的請求（已經在路上的照樣回來排隊）。
@@ -404,7 +404,8 @@ flowchart LR
 
 `runtime_book` 常駐，不分輪，用跟價格同一套派工（記憶體排程、出口有空位就派、兩種失敗、位子 HTTP 回來就釋放、市場在途到寫完才解除、每 60 秒維護與 `dispatch_summary`，欄位同價格）。不同的地方：
 
-- **間隔：** `book_levels=0` 用入口的 `book_seconds=300` 秒；`book_levels>0` 或 null 用需求表 `refresh_seconds`，但都抓整本。下次該抓的時間＝上次請求時間＋間隔；啟動時從需求表＋掛單簿表算一次，沒有列的排最前面。
+- **間隔：** `book_levels=0` 用入口的 `book_seconds=300` 秒；`book_levels>0` 或 null 用需求表 `refresh_seconds`，但都抓整本。下次該抓的時間＝上次請求時間＋間隔；啟動時從需求表＋掛單簿表算一次。
+- **啟動時錯開：** 只在啟動後第一次載入排程時，沒有列的與已經到期的掛單簿，下次該抓的時間設成「現在＋0～一個間隔之間的隨機秒數」，平均攤在一個間隔裡，不會全部同時到期、之後每個間隔一波；沒到期的照舊。所以重啟後，舊的掛單簿最多再晚一個間隔才更新。之後每 60 秒重讀需求表新加的市場照舊最先抓。`--once` 不錯開。價格不這樣做（有空就派，本來就不會一波一波）。
 - **只抓到期的：** 一本平均約 730 bytes，是價格的好幾倍，有空就派會把頻寬與寫入吃掉，所以只取已經到期的（沒抓過的最先）；沒有到期的就等，0.5 秒（入口的 `due_wait`）後再看一次。
 - **派工與寫入：** 一個 `POST /books` 最多 500 個 token；每個出口在途 4、500 次／10 秒。2 條 autocommit 寫入連線，每批一個 statement，等著寫的到 8 批就先不派新的。每次抓到的都寫（只抓到期的，本來就都到了該寫的時候），`requested_at` 是該批送出請求前的時間。
 - **維護：** 每 60 秒刪掉需求外的掛單簿列（照 market_id 順序上鎖，跟寫入一樣）、重讀需求表進排程。`--once` 時沒抓過的與已到期的各抓一次就結束。

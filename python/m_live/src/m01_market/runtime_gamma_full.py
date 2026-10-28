@@ -15,13 +15,18 @@ from h_shared.h_process import Result
 
 
 def runtime_gamma_full(
-    ips: IPPool, *, page_size: int, max_pages: int, write_batch: int, transaction_events: int
+    ips: IPPool, *, page_size: int, max_pages: int, write_batch: int, transaction_markets: int
 ) -> Result:
     started = time.monotonic()
     scan_started = datetime.now(UTC)
     events, markets, outcomes, pages = c01_scan(ips, page_size, max_pages)
     writes = c02_publish(
-        events, markets, outcomes, write_batch, scan_started, transaction_events=transaction_events
+        events,
+        markets,
+        outcomes,
+        write_batch,
+        scan_started,
+        transaction_markets=transaction_markets,
     )
     ips.report(success=len(events) + len(markets) + len(outcomes), no_data=int(not events))
     c03_report(events, markets, outcomes, pages, ips.requests, started, writes)
@@ -329,12 +334,12 @@ def c02_publish(
     batch: int,
     scan_started: datetime | None = None,
     *,
-    transaction_events: int,
+    transaction_markets: int,
 ) -> dict[str, float]:
-    """Publish in transactions of transaction_events events, each with its events' markets and
-    those markets' outcomes; source time guards both writers. A full sweep (scan_started) then
-    retires what it did not see in one short transaction. A failure keeps the transactions already
-    committed and retires nothing; the next sweep catches up."""
+    """Publish in transactions of at most transaction_markets markets (s15_chunks), each with its
+    events, those markets and their outcomes; source time guards both writers. A full sweep
+    (scan_started) then retires what it did not see in one short transaction. A failure keeps the
+    transactions already committed and retires nothing; the next sweep catches up."""
     events = sorted(events, key=lambda r: r[0])
     children, results = defaultdict(list), defaultdict(list)
     for market in markets:
@@ -345,12 +350,9 @@ def c02_publish(
         raise ValueError("Every published market needs its event in the same publication")
     seconds, started = [], time.monotonic()
     with h_connect(autocommit=True) as connection:
-        for start in range(0, len(events), transaction_events):
-            chunk = events[start : start + transaction_events]
+        for chunk_events, chunk_markets in s15_chunks(events, children, transaction_markets):
             begun = time.monotonic()
-            s13_publish_events(
-                connection, chunk, [m for e in chunk for m in children[e[0]]], results, batch
-            )
+            s13_publish_events(connection, chunk_events, chunk_markets, results, batch)
             seconds.append(time.monotonic() - begun)
         if scan_started is not None:
             begun = time.monotonic()
@@ -360,7 +362,27 @@ def c02_publish(
         "transactions": len(seconds),
         "longest_transaction_seconds": round(max(seconds, default=0), 3),
         "write_seconds": round(time.monotonic() - started, 3),
+        "largest_event_markets": max(map(len, children.values()), default=0),
     }
+
+
+def s15_chunks(
+    events: list[tuple], children: dict, size: int
+) -> list[tuple[list[tuple], list[tuple]]]:
+    """(events, markets) per transaction: events in order, each with all its markets into the
+    current transaction while they fit in `size`, else into a new one. An event with more than
+    `size` markets goes on over the next transactions, its row in the first."""
+    chunks = []
+    for event in events:
+        rows = sorted(children[event[0]], key=lambda r: r[0])
+        if not chunks or (chunks[-1][1] and len(chunks[-1][1]) + len(rows) > size):
+            chunks.append(([], []))
+        chunks[-1][0].append(event)
+        for start in range(0, len(rows), size):
+            if start:
+                chunks.append(([], []))
+            chunks[-1][1].extend(rows[start : start + size])
+    return chunks
 
 
 def s13_publish_events(

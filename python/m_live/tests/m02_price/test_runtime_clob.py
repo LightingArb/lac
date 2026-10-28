@@ -454,6 +454,33 @@ def test_failed_batch_goes_back_and_dispatch_goes_on(database, monkeypatch, caps
     assert requeued[0]["markets"] == 1
 
 
+@pytest.mark.parametrize(
+    ("failure", "status", "reason"),
+    [
+        (requests.exceptions.ProxyError, 0, "ProxyError"),
+        (requests.exceptions.ReadTimeout, 0, "ReadTimeout"),
+        (502, 502, "HTTP 502"),
+    ],
+)
+def test_requeued_batch_logs_what_the_last_attempt_failed_on(
+    database, monkeypatch, capsys, failure, status, reason
+):
+    pool, failures = pool_of(retries=0), []
+
+    def answer(markets):
+        if markets == {"r4-test-b"} and not failures:
+            failures.append(1)
+            if failure == 502:
+                return 502
+            raise failure("test failure")
+
+    fake_prices(pool, monkeypatch, answer=answer)
+    result = clob.runtime_clob(pool, stop=threading.Event(), once=True, **settings())
+    assert result == Result.COMPLETE
+    requeued = [log for log in logs(capsys) if log["event"] == "batch_requeued"]
+    assert [(log["status"], log["reason"]) for log in requeued] == [(status, reason)]
+
+
 @pytest.mark.parametrize("answer", [404, b'{"unrequested-asset": {}}'])
 def test_invalid_batch_is_not_written_and_waits_an_interval(database, monkeypatch, capsys, answer):
     pool = pool_of()

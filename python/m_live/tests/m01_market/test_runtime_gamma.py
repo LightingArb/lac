@@ -95,8 +95,8 @@ def database(monkeypatch, empty_database):
     yield empty_database
 
 
-# One event per transaction in the tests, so every full publication spans several.
-publish = partial(full.c02_publish, transaction_events=1)
+# One market per transaction in the tests, so a publication with several markets spans several.
+publish = partial(full.c02_publish, transaction_markets=1)
 
 
 @pytest.mark.parametrize("writer", [publish, recent.c04_publish])
@@ -181,6 +181,40 @@ def sweep():
     return events, [market], outcomes
 
 
+# Markets per event in chunked_sweep, in event id order.
+SIZES = {"r6-e1": 1, "r6-e2": 1, "r6-e3": 5, "r6-e4": 0, "r6-e5": 2}
+
+
+def chunked_sweep():
+    """Real event and market objects under new ids, SIZES markets per event, own assets each."""
+    events, markets, outcomes = [], [], []
+    for event_id, size in SIZES.items():
+        event = copy.deepcopy(EVENT) | {"id": event_id, "slug": event_id}
+        events.append(full.s01_event(event, NOW))
+        for ordinal in range(size):
+            market_id = f"{event_id}-m{ordinal}"
+            assets = json.dumps([f"{market_id}-0", f"{market_id}-1"])
+            source = copy.deepcopy(EVENT["markets"][2]) | {"id": market_id, "clobTokenIds": assets}
+            row, results = full.s02_market(source, event_id, ordinal, NOW)
+            markets.append(row)
+            outcomes += results
+    return events, markets, outcomes
+
+
+def record_transactions(monkeypatch, fail_at=None):
+    """Record each transaction's (event ids, market ids); fail_at: that one (1-based) raises."""
+    write, calls = full.s13_publish_events, []
+
+    def recorded(connection, events, markets, *args):
+        calls.append(([r[0] for r in events], [r[0] for r in markets]))
+        if len(calls) == fail_at:
+            raise RuntimeError("test write failure")
+        return write(connection, events, markets, *args)
+
+    monkeypatch.setattr(full, "s13_publish_events", recorded)
+    return calls
+
+
 def scan_flags(connection, table, key, ids):
     return dict(
         connection.execute(
@@ -189,60 +223,69 @@ def scan_flags(connection, table, key, ids):
     )
 
 
-def test_full_sweep_writes_small_transactions_then_retires_what_it_did_not_see(database):
-    events, markets, outcomes = sweep()
+def stale_rows():
+    """An event and market written before the sweep starts that the sweep will not see."""
     stale = copy.deepcopy(EVENT) | {"id": "r5-stale-event", "slug": "r5-stale-event"}
     stale_market = copy.deepcopy(EVENT["markets"][2]) | {"id": "r5-stale-market"}
-    stale_row = full.s02_market(stale_market, stale["id"], 0, NOW)[0]
-    publish([full.s01_event(stale, NOW)], [stale_row], [], 100)
-    boundary = datetime.now(UTC)  # this sweep starts after the stale rows were written
-    writes = full.c02_publish(events, markets, outcomes, 100, boundary, transaction_events=1)
-    # Two events, one per transaction, then one transaction retiring what the sweep missed.
-    assert writes["transactions"] == 3
+    publish(
+        [full.s01_event(stale, NOW)],
+        [full.s02_market(stale_market, stale["id"], 0, NOW)[0]],
+        [],
+        100,
+    )
+    return datetime.now(UTC)  # the sweep starts after the stale rows were written
+
+
+def test_full_sweep_fills_transactions_by_markets_then_retires_what_it_did_not_see(
+    database, monkeypatch
+):
+    events, markets, outcomes = chunked_sweep()
+    boundary = stale_rows()
+    calls = record_transactions(monkeypatch)
+    writes = full.c02_publish(events, markets, outcomes, 100, boundary, transaction_markets=2)
+    # Events in order while their markets fit in 2; e3's 5 markets go on over three
+    # transactions with its row in the first; e4 (no markets) fits beside e3's last; e5's two
+    # do not, so they open the next. Then one transaction retires what the sweep missed.
+    assert calls == [
+        (["r6-e1", "r6-e2"], ["r6-e1-m0", "r6-e2-m0"]),
+        (["r6-e3"], ["r6-e3-m0", "r6-e3-m1"]),
+        ([], ["r6-e3-m2", "r6-e3-m3"]),
+        (["r6-e4"], ["r6-e3-m4"]),
+        (["r6-e5"], ["r6-e5-m0", "r6-e5-m1"]),
+    ]
+    assert writes["transactions"] == 6 and writes["largest_event_markets"] == 5
     assert 0 <= writes["longest_transaction_seconds"] <= writes["write_seconds"]
-    ids = [r[0] for r in events] + [stale["id"]]
-    assert scan_flags(database, "m01_event", "event_id", ids) == {
-        EVENT["id"]: True,
-        "r5-second-event": True,
-        "r5-stale-event": False,
-    }
-    assert scan_flags(database, "m01_market", "market_id", [markets[0][0], "r5-stale-market"]) == {
-        markets[0][0]: True,
-        "r5-stale-market": False,
-    }
-    assert len(
-        database.execute(
-            "SELECT 1 FROM m_live.m01_outcome WHERE market_id=%s", (markets[0][0],)
-        ).fetchall()
-    ) == len(outcomes)
+    flags = scan_flags(database, "m01_event", "event_id", [*SIZES, "r5-stale-event"])
+    assert flags == dict.fromkeys(SIZES, True) | {"r5-stale-event": False}
+    ids = [r[0] for r in markets]
+    assert scan_flags(database, "m01_market", "market_id", [*ids, "r5-stale-market"]) == (
+        dict.fromkeys(ids, True) | {"r5-stale-market": False}
+    )
+    assert database.execute(
+        "SELECT count(*) FROM m_live.m01_outcome WHERE market_id=ANY(%s)", (ids,)
+    ).fetchone() == (len(outcomes),)
 
 
 def test_full_sweep_failing_halfway_keeps_written_transactions_and_retires_nothing(
     database, monkeypatch
 ):
-    events, markets, outcomes = sweep()
-    stale = copy.deepcopy(EVENT) | {"id": "r5-stale-event", "slug": "r5-stale-event"}
-    publish([full.s01_event(stale, NOW)], [], [], 100)
-    write, calls = full.s13_publish_events, []
-
-    def fail_second(connection, *args):
-        calls.append(1)
-        if len(calls) == 2:
-            raise RuntimeError("test write failure")
-        return write(connection, *args)
-
-    monkeypatch.setattr(full, "s13_publish_events", fail_second)
-    boundary = datetime.now(UTC)
+    events, markets, outcomes = chunked_sweep()
+    boundary = stale_rows()
+    record_transactions(monkeypatch, fail_at=3)
     with pytest.raises(RuntimeError, match="write failure"):
-        full.c02_publish(events, markets, outcomes, 100, boundary, transaction_events=1)
-    # The first event's transaction stays; the second is not there; nothing left the scan.
-    assert scan_flags(
-        database, "m01_event", "event_id", [r[0] for r in events] + [stale["id"]]
-    ) == {
-        EVENT["id"]: True,
+        full.c02_publish(events, markets, outcomes, 100, boundary, transaction_markets=2)
+    # The first two transactions stay (e1, e2, e3's row and its first two markets); the rest
+    # is not there; nothing left the scan.
+    assert scan_flags(database, "m01_event", "event_id", [*SIZES, "r5-stale-event"]) == {
+        "r6-e1": True,
+        "r6-e2": True,
+        "r6-e3": True,
         "r5-stale-event": True,
     }
-    assert scan_flags(database, "m01_market", "market_id", [markets[0][0]]) == {markets[0][0]: True}
+    ids = [r[0] for r in markets] + ["r5-stale-market"]
+    assert scan_flags(database, "m01_market", "market_id", ids) == dict.fromkeys(
+        ["r6-e1-m0", "r6-e2-m0", "r6-e3-m0", "r6-e3-m1", "r5-stale-market"], True
+    )
 
 
 def test_full_sweep_locks_event_then_market_per_transaction(monkeypatch):
@@ -251,7 +294,8 @@ def test_full_sweep_locks_event_then_market_per_transaction(monkeypatch):
     # The market statement accepts the market, so its outcomes are written too.
     connection.execute.return_value.__iter__.return_value = [(markets[0][0],)]
     monkeypatch.setattr(full, "h_connect", lambda **kwargs: nullcontext(connection))
-    full.c02_publish(list(reversed(events)), markets, outcomes, 100, NOW, transaction_events=1)
+    # One market per transaction: the second event has none, so both share the first.
+    full.c02_publish(list(reversed(events)), markets, outcomes, 100, NOW, transaction_markets=1)
     steps = []
     for name, args, _ in connection.mock_calls:
         if name == "transaction":
@@ -263,17 +307,13 @@ def test_full_sweep_locks_event_then_market_per_transaction(monkeypatch):
             steps.append(f"{kind} {table}" + (f" {args[1][0]}" if kind == "lock" else ""))
     first, second = (r[0] for r in events)
     assert steps == [
-        # One transaction per event, in event order: lock the event, write it, lock its markets.
+        # Lock the events in id order, write them, lock their markets, write those.
         "begin",
-        f"lock m01_event {[first]}",
+        f"lock m01_event {[first, second]}",
         "insert m01_event",
         f"lock m01_market {[markets[0][0]]}",
         "insert m01_market",
         "insert m01_outcome",
-        "begin",
-        f"lock m01_event {[second]}",
-        "insert m01_event",
-        "lock m01_market []",
         # Then retire: events before markets, each locked in id order before the update.
         "begin",
         f"lock m01_event {[first, second]}",
@@ -281,7 +321,7 @@ def test_full_sweep_locks_event_then_market_per_transaction(monkeypatch):
         f"lock m01_market {[markets[0][0]]}",
         "update m01_market",
     ]
-    assert connection.transaction.call_args_list == [call()] * 3
+    assert connection.transaction.call_args_list == [call()] * 2
 
 
 def test_full_publish_allows_downstream_foreign_key_reads(database):
