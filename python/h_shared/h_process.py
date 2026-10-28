@@ -10,7 +10,14 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from h_shared.h_ip_pool import ContractError, HttpPolicy, IPPool, ProviderError, h_validate_ips
+from h_shared.h_ip_pool import (
+    ContractError,
+    HttpPolicy,
+    IPPool,
+    ProviderError,
+    h_exit_label,
+    h_validate_ips,
+)
 from h_shared.h_log import h_log
 
 
@@ -177,7 +184,7 @@ def h_run(
         once=once,
         period_s=schedule.period_s,
         rest_s=schedule.rest_s,
-        ips=[ip or "default" for ip in ips.addresses],
+        ips=[h_exit_label(address) for address in ips.addresses],
         ip_inflight=ip_inflight,
     )
     try:
@@ -219,6 +226,7 @@ def h_run(
                 ended_at=datetime.now(UTC).isoformat(),
                 seconds=elapsed,
                 requests=ips.requests,
+                exit_requests=ips.requests_by_exit(),
                 success=ips.success,
                 no_data=ips.no_data,
                 error=max(

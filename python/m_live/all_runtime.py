@@ -16,7 +16,8 @@ def all_runtime() -> None:
         "--unit", choices=("recent", "full", "demand", "clob", "book", "all"), default="all"
     )
     args = parser.parse_args()
-    OUTBOUND_IPS = h_outbound_ips()
+    # Each proxy exit must reach the CLOB before any runtime starts.
+    OUTBOUND_IPS = h_outbound_ips(check_url="https://clob.polymarket.com/time", check_timeout=30)
     # https://docs.polymarket.com/api-reference/rate-limits
     # /markets: 300/10s; /events: 500/10s split full 400 + recent 100.
     # Keyset consumes the corresponding listing quota; total 800 < combined 900.

@@ -13,7 +13,8 @@ def all_runtime() -> None:
     mode.add_argument("--once", action="store_true")
     mode.add_argument("--errors-only", action="store_true")
     args = parser.parse_args()
-    OUTBOUND_IPS = h_outbound_ips()
+    # Each proxy exit must reach Polymarket (the CLOB) before any runtime starts.
+    OUTBOUND_IPS = h_outbound_ips(check_url="https://clob.polymarket.com/time", check_timeout=30)
     # Data API quota is independent of m_live's Gamma and CLOB endpoint quotas.
     with h_lock():
         h_wait(

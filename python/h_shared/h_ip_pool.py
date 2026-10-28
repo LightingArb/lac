@@ -39,29 +39,110 @@ class HttpPolicy:
     max_response_bytes: int
 
 
-def h_outbound_ips() -> list[str]:
-    """Read only the injected environment; never search for a dotenv file."""
+def h_outbound_ips(check_url: str, check_timeout: float) -> list[str]:
+    """Read only the injected environment; never search for a dotenv file.
+
+    Each proxy must answer check_url with HTTP 200 before any runtime starts (one GET per proxy).
+    """
     try:
         value = json.loads(os.environ["OUTBOUND_IPS"])
         if not isinstance(value, list) or any(not isinstance(ip, str) for ip in value):
-            raise ValueError
-        return h_validate_ips(value)
-    except (KeyError, ValueError, TypeError, OSError, subprocess.SubprocessError):
-        h_log("all_runtime", "configuration_error", reason="Invalid/nonlocal OUTBOUND_IPS")
+            raise ValueError("OUTBOUND_IPS is not a JSON array of strings")
+        exits = h_validate_ips(value)
+    except (KeyError, ValueError, TypeError, OSError, subprocess.SubprocessError) as error:
+        # Messages from h_validate_ips name a proxy by host:port only.
+        h_log("all_runtime", "configuration_error", reason=f"Invalid OUTBOUND_IPS: {error}")
         raise SystemExit(1) from None
+    for proxy in (e for e in exits if h_is_proxy(e)):
+        h_check_proxy(proxy, check_url, check_timeout)
+    return exits
 
 
 def h_validate_ips(ips: list[str]) -> list[str]:
-    """Reject any extra address absent from local network interfaces before spawning."""
-    addresses = [str(ipaddress.ip_address(ip)) for ip in ips]
-    if len(set(addresses)) != len(addresses):
-        raise ValueError("Duplicate outbound IP")
+    """Each exit is an IP on a local interface (requests bind it as source address) or an
+    http://user:password@host:port proxy (requests go through it). Reject the rest before
+    spawning; messages never echo an entry, so proxy credentials stay out of the log.
+    """
+    exits, seen = [], set()
+    for entry in ips:
+        if "://" in entry:
+            key = h_proxy_label(entry)
+        else:
+            try:
+                entry = key = str(ipaddress.ip_address(entry))
+            except ValueError:
+                raise ValueError("Outbound entry is neither an IP nor an http:// proxy") from None
+        if key in seen:
+            raise ValueError(f"Duplicate outbound exit {key}")
+        seen.add(key)
+        exits.append(entry)
+    addresses = [e for e in exits if not h_is_proxy(e)]
     if addresses:
         interfaces = json.loads(subprocess.check_output(["ip", "-j", "address"], text=True))
         local = {a["local"] for interface in interfaces for a in interface["addr_info"]}
         if not set(addresses).issubset(local):
             raise ValueError("Outbound IP is not assigned to this host")
-    return addresses
+    return exits
+
+
+def h_is_proxy(address: str | None) -> bool:
+    return address is not None and "://" in address
+
+
+def h_proxy_label(proxy: str) -> str:
+    """host:port of an http:// proxy; the only part of it that logs and errors may show."""
+    try:
+        parts = urlsplit(proxy)
+        port = parts.port
+    except ValueError:
+        raise ValueError("Proxy is not http://user:password@host:port") from None
+    if parts.scheme != "http":
+        raise ValueError("Only http:// proxies are supported")
+    if not parts.hostname or port is None or parts.path not in ("", "/"):
+        raise ValueError("Proxy is not http://user:password@host:port")
+    if parts.query or parts.fragment:
+        raise ValueError("Proxy is not http://user:password@host:port")
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    return f"{host}:{port}"
+
+
+def h_exit_label(address: str | None) -> str:
+    """How logs name an exit: default, the IP, or a proxy's host:port."""
+    if address is None:
+        return "default"
+    return h_proxy_label(address) if h_is_proxy(address) else address
+
+
+def h_check_proxy(proxy: str, url: str, timeout: float) -> None:
+    """GET url once through the proxy; anything but HTTP 200 stops the service."""
+    label, started = h_proxy_label(proxy), time.monotonic()
+    try:
+        with requests.Session() as session:
+            session.trust_env = False
+            session.headers["User-Agent"] = "LAC-local-demo/1.0"
+            with session.get(
+                url,
+                proxies={"http": proxy, "https": proxy},
+                timeout=timeout,
+                allow_redirects=False,
+                stream=True,
+            ) as response:
+                status, reason = response.status_code, None
+    except requests.RequestException as error:
+        status, reason = 0, type(error).__name__
+    if status != 200:
+        h_log(
+            "all_runtime",
+            "configuration_error",
+            reason="Proxy check failed",
+            proxy=label,
+            url=url,
+            status=status,
+            error=reason,
+        )
+        raise SystemExit(1)
+    seconds = round(time.monotonic() - started, 3)
+    h_log("all_runtime", "proxy_checked", proxy=label, url=url, status=status, seconds=seconds)
 
 
 class SourceAdapter(HTTPAdapter):
@@ -75,9 +156,10 @@ class SourceAdapter(HTTPAdapter):
 
 
 class IPPool:
-    """Thread-safe admission; default route is unbound, extra addresses are bound.
+    """Thread-safe admission; default route is unbound, extra addresses are bound, proxies relay.
 
-    Quotas and 429 cooldowns persist across rounds in this runtime process only.
+    Every exit (default, local IP, proxy) has its own slots, endpoint quotas and 429 cooldowns,
+    which persist across rounds in this runtime process only.
     request() performs HTTP I/O; map() bounds outstanding work by total IP slots.
     """
 
@@ -112,6 +194,11 @@ class IPPool:
 
     def reset_round(self) -> None:
         self.requests = self.success = self.no_data = self.errors = self.response_bytes = 0
+        self.exit_requests = [0] * len(self.addresses)
+
+    def requests_by_exit(self) -> dict[str, int]:
+        """Requests admitted this round per exit, keyed by its log label."""
+        return {h_exit_label(a): n for a, n in zip(self.addresses, self.exit_requests)}
 
     def report(self, *, success: int = 0, no_data: int = 0, error: int = 0) -> None:
         with self.condition:
@@ -155,6 +242,7 @@ class IPPool:
                         self.inflight[i] += 1
                         used.append(now)
                         self.requests += 1
+                        self.exit_requests[i] += 1
                         self.next_ip = (i + 1) % len(self.addresses)
                         return i
                 self.condition.wait(min(waits) if waits else None)
@@ -178,8 +266,11 @@ class IPPool:
             session = requests.Session()
             session.trust_env = False
             session.headers["User-Agent"] = "LAC-local-demo/1.0"
-            if self.addresses[index] is not None:
-                adapter = SourceAdapter(self.addresses[index])
+            address = self.addresses[index]
+            if h_is_proxy(address):
+                session.proxies = {"http": address, "https": address}
+            elif address is not None:
+                adapter = SourceAdapter(address)
                 session.mount("https://", adapter)
                 session.mount("http://", adapter)
             self.local.sessions[index] = session
@@ -236,7 +327,7 @@ class IPPool:
                 "target": target or endpoint,
                 "provider": urlsplit(url).hostname,
                 "endpoint": endpoint,
-                "ip": self.addresses[index] or "default",
+                "ip": h_exit_label(self.addresses[index]),
                 "status": 0,
             }
             try:

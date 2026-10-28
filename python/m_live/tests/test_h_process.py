@@ -1,5 +1,6 @@
 """Transport/scheduler boundary tests use synthetic HTTP, never market fixtures."""
 
+import base64
 import json
 import multiprocessing as mp
 import os
@@ -9,14 +10,25 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import requests
 
 import h_shared.h_process as process
-from h_shared.h_ip_pool import ContractError, HttpPolicy, IPPool, ProviderError, h_outbound_ips
+from h_shared.h_ip_pool import (
+    ContractError,
+    HttpPolicy,
+    IPPool,
+    ProviderError,
+    h_outbound_ips,
+    h_validate_ips,
+)
 from h_shared.h_process import Result, Schedule, h_delay, h_process, h_stop, h_wait
+
+SECRET = "s3cr3t-pw"
+CHECK = {"check_url": "http://clob.invalid/time", "check_timeout": 2}
 
 
 def pool(*, ips=(), inflight=2, limits=None, retries=2, size=10000):
@@ -191,15 +203,187 @@ def test_source_address_is_observed_by_http_server():
 
 def test_outbound_environment_validation(monkeypatch, capsys):
     monkeypatch.setenv("OUTBOUND_IPS", "[]")
-    assert h_outbound_ips() == []
+    assert h_outbound_ips(**CHECK) == []
     monkeypatch.setenv("OUTBOUND_IPS", '["127.0.0.1"]')
-    assert h_outbound_ips() == ["127.0.0.1"]
+    assert h_outbound_ips(**CHECK) == ["127.0.0.1"]
     for value in ('["192.0.2.250"]', "null", "{}", "[1]", "invalid"):
         monkeypatch.setenv("OUTBOUND_IPS", value)
         with pytest.raises(SystemExit) as caught:
-            h_outbound_ips()
+            h_outbound_ips(**CHECK)
         assert caught.value.code == 1
     assert "configuration_error" in capsys.readouterr().out
+
+
+@contextmanager
+def http_proxy(status=200):
+    """A local HTTP proxy: answers every absolute-form request itself and records it."""
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, self.headers.get("Proxy-Authorization")))
+            body = b'{"value": 0.5}'
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://lac:{SECRET}@127.0.0.1:{server.server_port}", seen
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_exits_are_local_ips_or_http_proxies_and_errors_hide_credentials():
+    proxy = f"http://lac:{SECRET}@203.0.113.7:50100"
+    assert h_validate_ips(["127.0.0.1", proxy]) == ["127.0.0.1", proxy]
+    assert h_validate_ips(["http://203.0.113.7:3128"]) == ["http://203.0.113.7:3128"]
+    other = f"http://other:{SECRET}@203.0.113.7:50100"
+    bad = [
+        ("Duplicate outbound exit 127.0.0.1", ["127.0.0.1", "127.0.0.1"]),
+        ("Duplicate outbound exit 203.0.113.7:50100", [proxy, other]),
+        ("Only http:// proxies", [f"https://lac:{SECRET}@203.0.113.7:50100"]),
+        ("Only http:// proxies", [f"socks5://lac:{SECRET}@203.0.113.7:50101"]),
+        ("Proxy is not", [f"http://lac:{SECRET}@203.0.113.7"]),
+        ("Proxy is not", [f"http://lac:{SECRET}@203.0.113.7:50100/path"]),
+        ("Proxy is not", [f"http://lac:{SECRET}@203.0.113.7:port"]),
+        ("neither an IP nor", [f"lac:{SECRET}@203.0.113.7:50100"]),
+        ("not assigned to this host", ["192.0.2.250"]),
+    ]
+    for message, entries in bad:
+        with pytest.raises(ValueError, match=message) as caught:
+            h_validate_ips(entries)
+        assert SECRET not in str(caught.value)
+
+
+def test_proxy_exit_requests_really_go_through_the_proxy():
+    with http_proxy() as (proxy, seen):
+        client = pool(ips=[proxy])
+        try:
+            # The target name cannot resolve: only a request relayed by the proxy gets an answer.
+            for _ in range(2):
+                client.next_ip = 1
+                assert client.request("GET", "http://market.invalid/prices")["value"] == 0.5
+        finally:
+            client.close()
+    expected = "Basic " + base64.b64encode(f"lac:{SECRET}".encode()).decode()
+    assert seen == [("http://market.invalid/prices", expected)] * 2
+    assert client.requests_by_exit() == {"default": 0, proxy.rsplit("@", 1)[1]: 2}
+
+
+def test_each_exit_has_its_own_quota_and_429_cooldown(monkeypatch):
+    proxy = f"http://lac:{SECRET}@proxy.test:8080"
+    client = pool(ips=["192.0.2.1", proxy], limits={"/prices": (1, 0.3)})
+    calls, limited = [], set()
+
+    def request(i, method, url, kwargs):
+        calls.append((i, time.monotonic()))
+        return Response(429, retry_after="5") if i in limited else Response()
+
+    transport(monkeypatch, client, request)
+    for _ in range(3):
+        client.request("GET", "https://test/prices")
+    # One request per exit fits the window at once; a fourth waits for the oldest window.
+    assert [i for i, _ in calls] == [0, 1, 2]
+    assert calls[2][1] - calls[0][1] < 0.2
+    client.request("GET", "https://test/prices")
+    assert calls[3][0] == 0 and calls[3][1] - calls[0][1] >= 0.25
+    assert client.requests_by_exit() == {"default": 2, "192.0.2.1": 1, "proxy.test:8080": 1}
+    # A 429 through the proxy cools only the proxy; the request moves to another exit.
+    limited.add(2)
+    time.sleep(0.31)
+    client.next_ip = 2
+    client.request("GET", "https://test/prices")
+    assert [i for i, _ in calls[-2:]] == [2, 0]
+    assert client.blocked[2]["/prices"] > time.monotonic() + 4
+    assert client.blocked[0]["/prices"] == client.blocked[1]["/prices"] == 0
+
+
+def test_proxy_check_failure_stops_before_any_runtime(monkeypatch, capsys):
+    with http_proxy() as (proxy, seen):
+        monkeypatch.setenv("OUTBOUND_IPS", json.dumps(["127.0.0.1", proxy]))
+        assert h_outbound_ips(**CHECK) == ["127.0.0.1", proxy]
+        assert seen == [("http://clob.invalid/time", seen[0][1])]
+    with http_proxy(status=403) as (proxy, _):
+        monkeypatch.setenv("OUTBOUND_IPS", json.dumps([proxy]))
+        with pytest.raises(SystemExit) as caught:
+            h_outbound_ips(**CHECK)
+        assert caught.value.code == 1
+    logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [log["event"] for log in logs] == ["proxy_checked", "configuration_error"]
+    assert logs[1]["status"] == 403 and logs[1]["proxy"] == proxy.rsplit("@", 1)[1]
+    # A proxy nobody answers on: the module exits before starting anything.
+    result = subprocess.run(
+        [sys.executable, "-m", "m_live.all_runtime", "--once"],
+        check=False,
+        env=os.environ | {"OUTBOUND_IPS": json.dumps([f"http://lac:{SECRET}@127.0.0.1:1"])},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 1
+    error = next(json.loads(line) for line in result.stdout.splitlines())
+    assert error["event"] == "configuration_error" and error["proxy"] == "127.0.0.1:1"
+    assert error["error"] == "ProxyError" and '"started"' not in result.stdout
+    assert SECRET not in result.stdout + result.stderr
+
+
+def test_logs_name_a_proxy_by_host_and_port_only(monkeypatch, capsys):
+    proxy = f"http://lac:{SECRET}@proxy.test:8080"
+
+    class Stop:
+        def is_set(self):
+            return False
+
+        def set(self):
+            pass
+
+        def wait(self, seconds):
+            pass
+
+    def runtime(ips):
+        ips.request("GET", "https://test/prices")
+        return Result.COMPLETE
+
+    def session(self, index):
+        class Session:
+            def request(self, *_, **__):
+                raise requests.ConnectionError(f"via {proxy}")
+
+        return Session()
+
+    monkeypatch.setattr(process.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(IPPool, "session", session)
+    # Both exits fail (one retry), so the single round ends in error and the runtime exits 1.
+    with pytest.raises(SystemExit):
+        process.h_run(
+            runtime,
+            True,
+            Schedule(10, None, 8, 5),
+            [proxy],
+            1,
+            {"/prices": (10, 1)},
+            HttpPolicy(1, 1, 1, 100),
+            {},
+            Stop(),
+            {"sha": "test", "service": "test"},
+        )
+    out = capsys.readouterr().out
+    logs = [json.loads(line) for line in out.splitlines()]
+    assert logs[0]["event"] == "started" and logs[0]["ips"] == ["default", "proxy.test:8080"]
+    errors = [log for log in logs if log["event"] == "request_error"]
+    assert {log["ip"] for log in errors} == {"default", "proxy.test:8080"}
+    finished = next(log for log in logs if log["event"] == "round_finished")
+    assert finished["exit_requests"] == {"default": 1, "proxy.test:8080": 1}
+    assert SECRET not in out
 
 
 def test_six_results_and_backoff_reset():

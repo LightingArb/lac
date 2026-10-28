@@ -78,6 +78,19 @@ OUTBOUND_IPS=[]
 
 這是本機開發用的預設值，只連本機資料庫。`DB_NAME` 必須是 `lac_data`、`DB_PORT` 必須是 `5432`，程式會檢查；帳號密碼可以改成你自己的。網站的 `DB_*` 只在伺服器端使用，不會傳到瀏覽器。
 
+`OUTBOUND_IPS` 是資料程式在主機預設出口以外的出口，JSON array，一項就是一個出口，兩種寫法可以混用：
+
+- **本機網卡上的 IP**，例如 `["203.0.113.5"]`：這個出口的請求綁定這個來源位址。
+- **HTTP 代理** `http://帳號:密碼@主機:port`，例如 `["http://user:pass@198.51.100.7:50100"]`：這個出口的請求都經過這個代理。只支援 `http://`（HTTPS 網站也是經它轉送）。
+
+Git 裡的 `.env` 維持 `OUTBOUND_IPS=[]`。repo 是公開的，代理清單含帳密，所以真正的清單放在根目錄的 `.env.local`：它列在 `.gitignore`，不會進 Git；只寫要蓋過去的那一行，例如：
+
+```dotenv
+OUTBOUND_IPS=["http://user:pass@198.51.100.7:50100","http://user:pass@198.51.100.8:50100"]
+```
+
+程式只讀環境變數，不自己找設定檔；`.env.local` 由啟動的地方在 `.env` 之後載入，有就蓋過去：手動跑時多加 `--env-file ../.env.local`（見第 5 步），systemd 服務檔已經寫好「有 `.env.local` 就接著載入」。log 與錯誤訊息只寫代理的主機與 port，不寫帳密。換出口、加減出口只改這一行，不改程式。
+
 ### 3. 建立資料庫帳號
 
 照 `.env` 建一個可以登入、可以建立資料庫的帳號（資料庫 `lac_data` 由下一步自動建立）：
@@ -113,6 +126,8 @@ cd python
 uv run --env-file ../.env python -m m_live.all_runtime
 ```
 
+有 `.env.local`（例如用代理出口）時，把它接在 `.env` 後面：`uv run --env-file ../.env --env-file ../.env.local python -m m_live.all_runtime`。
+
 - 會開五個進程：`recent` 每 60 秒掃新市場與關閉、追蹤結算；`full` 每 600 秒全掃；`demand` 每 60 秒發布需求；`clob` 抓到期報價、`book` 抓到期掛單簿。後兩者有 pending 就立即續跑，完成後休息 0.5 秒；預設掛單簿間隔 300 秒。
 - 空資料庫第一次：市場與需求資料發布後 clob、book 才有標的；第一批價格與掛單簿在各自下一輪開始取得。recent 的三條掃描各自最多 20 頁，空表回看 1 小時；達上限會發布已取得資料並記 warning。
 - 輸出是一行一個 JSON。`round_finished` 的 `result` 是 `complete` 才算成功。
@@ -121,7 +136,7 @@ uv run --env-file ../.env python -m m_live.all_runtime
 
 排程與 HTTP 設定在各模組的 `all_runtime.py`，每個 `h_process` 呼叫對應一個 runtime。`period_s` 從每輪開始起算；`rest_s`／`rest_ms` 從每輪結束起算，三者只能選一個。`not_updated` 在這兩種模式依宣告的週期／休息時間等待；`pending` 立即續跑。一般失敗等待依序為基準的 1、2、4、8 倍，成功後恢復；401／403 只暫停該 runtime 到重啟，期間持續記錯誤。
 
-四個對外請求 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的額外 IP（JSON array）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。額外 IP 必須存在於本機網卡，否則服務啟動失敗；額外 IP 的請求會綁定來源位址。每個 IP 的 clob 最多 16 個在途請求，book、recent、full 各最多 4 個，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該 IP 的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
+四個對外請求 runtime 都使用主機預設出口加上 `OUTBOUND_IPS` 的每一個出口（本機 IP 或 HTTP 代理，寫法見第 2 步）；空陣列只有預設出口。不宣告 `ips` 或設成 `default` 也只有預設出口。項目重複或格式不對，服務啟動失敗；額外 IP 必須存在於本機網卡，請求綁定來源位址；每個代理在啟動時先經它打一次 CLOB `GET /time`，不是 HTTP 200 就啟動失敗，log 寫是哪一個代理（主機與 port）。每個出口（預設、本機 IP、代理）的在途數、額度與 429 冷卻各算各的：clob 每個出口最多 16 個在途請求，book、recent、full 各最多 4 個，額度按 endpoint 分開；所有槽位忙或額度用完就等待。429 只冷卻該出口的該 endpoint，全部出口都被擋才回報 runtime 限流；優先依 `Retry-After`，沒有時等待 60 秒。`round_finished` 的 `exit_requests` 是這一輪每個出口送出的請求數。每個請求逾時 30 秒、最多重試 2 次、回應上限 64 MiB，所有數值都列在入口。執行入口只排程與讀寫業務資料，資料表請先用上面的 setup 指令建立。
 
 **歷史價格（另一個資料終端機）。** `runtime_history` 常駐補最近 7 個完整 UTC 日，且不早於入口的 `first_day=2026-10-23`。每市場每天保存第一個結果的分鐘價格；昨天在 00:10 UTC 後才抓，最舊的天優先。Normal 只處理沒有列的 pending；成功、空日與 error 都不會自動重抓，範圍外既有列永久保留。
 
@@ -130,13 +145,13 @@ cd python
 uv run --env-file ../.env python -m m_historical.all_runtime
 ```
 
-可加 `--once` 執行至目前待處理工作完成後結束；仍有 pending 時會立即續輪。每輪最多 10,000 個市場日，沒有待抓工作時休息 60 秒；中斷後直接重啟，依資料庫重新挑未抓的市場日。SIGTERM／Ctrl+C 會完成當輪再退出。
+有 `.env.local` 時一樣接在後面：`uv run --env-file ../.env --env-file ../.env.local python -m m_historical.all_runtime`。可加 `--once` 執行至目前待處理工作完成後結束；仍有 pending 時會立即續輪。每輪最多 10,000 個市場日，沒有待抓工作時休息 60 秒；中斷後直接重啟，依資料庫重新挑未抓的市場日。SIGTERM／Ctrl+C 會完成當輪再退出。
 
 歷史與 m_live 共用主機預設出口及 `OUTBOUND_IPS`，每 IP 在途 16，Data API `/v2/prices-history` 每 10 秒最多 200 次。每輪重用一條 autocommit 連線，HTTP 與寫入分開，待寫入最多 8 批（含正在寫的一批）。請求在共用層重試用完後仍失敗，或回應不合法，就寫入 error；401／403 與限流沿用共用排程規則，pending 不寫 error。
 
 **歷史錯誤維護。** 由操作人員先停止 Normal，再執行 `uv run --env-file ../.env python -m m_historical.all_runtime --errors-only`。模式啟動時用 PostgreSQL `WITH HOLD` cursor 凍結目前日期及市場範圍的 error identity，以每批最多 10,000 筆讀取；沒有跨 HTTP 的 transaction，也不建立工作表。每筆只處理一次，沿用 Normal 的取得、解析與寫入流程；成功覆寫為 success／no_data，失敗保留 error 並將累計失敗次數加 1。遇到 401／403／限流時，本次維護以非零碼結束，未完成的 error 保持原狀。兩種模式的入口全程持有同一個 advisory lock，重疊啟動會拒絕；完成維護後由操作人員啟動 Normal。
 
-**WSL 背景歷史服務。** 服務設定在 [m_historical/deploy](python/m_historical/deploy/)，使用 `/home/admin/web/python` 與根目錄 `.env`。以 `systemctl --user enable --now lac_data-m-historical.service` 啟用，`loginctl enable-linger admin` 讓 user manager 在無登入時也能執行。服務不自動重啟；`systemctl --user stop` 等當輪完成後退出。關閉終端機後會繼續跑，但 Windows／WSL 必須維持運行，VPN 必須可用；enable 會在 WSL 啟動時帶起服務，不會自行啟動 Windows 或 WSL。
+**WSL 背景歷史服務。** 服務設定在 [m_historical/deploy](python/m_historical/deploy/)，使用 `/home/admin/web/python` 與根目錄 `.env`，有 `.env.local` 就接著載入（m_live 的服務檔也一樣）。以 `systemctl --user enable --now lac_data-m-historical.service` 啟用，`loginctl enable-linger admin` 讓 user manager 在無登入時也能執行。服務不自動重啟；`systemctl --user stop` 等當輪完成後退出。關閉終端機後會繼續跑，但 Windows／WSL 必須維持運行，VPN 必須可用；enable 會在 WSL 啟動時帶起服務，不會自行啟動 Windows 或 WSL。
 
 歷史服務常用指令（在 WSL；更新程式需先停止，更新與 setup 成功後再啟動）：
 

@@ -5,6 +5,7 @@ Description=LAC live market data collection
 Type=simple
 WorkingDirectory=/home/admin/web/python
 EnvironmentFile=/home/admin/web/.env
+EnvironmentFile=-/home/admin/web/.env.local
 ExecStart=/home/admin/web/python/.venv/bin/python -m m_live.all_runtime
 Restart=no
 KillMode=mixed
